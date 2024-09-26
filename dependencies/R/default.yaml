@@ -1,0 +1,38 @@
+author: "Alicia Rich"
+date: "`r Sys.Date()`"
+output:
+  bookdown::html_document2:
+    css: "microbiome.css"
+    toc: true
+    toc_location: "before"
+    toc_depth: 4
+    number_sections: false
+    toc_float: true
+    code_folding: "hide"
+    fig_caption: true
+    bibliography: ["/Users/aliciamrich/RStudioMacbook/Bibliographies/loris_mb.bib"]
+  link_citations: true
+  csl: ["/Users/aliciamrich/RStudioMacbook/Bibliographies/plos.csl"]
+params:
+  date: !r Sys.Date()
+  day1:     "2023-10-25"
+  min_length: 1000
+  max_length: 2000
+  min_qual: 7
+  min_id: 85
+  min_cov: 80
+  ntaxa: 12
+  kit_name: "SQK-16S114-24"
+  model: "dna_r10.4.1_e8.2_400bps_sup@v5.0.0"
+  home_dir: "/work/richlab/aliciarich/microbiomes_loris"
+  local: "/Users/aliciamrich/RStudioMacbook/GitRepos/microbiomes_loris/"
+  taxonomy.ordered: [superkingdom,
+                     phylum,
+                     class,
+                     order,
+                     family,
+                     genus,
+                     species]
+
+editor_options: 
+  chunk_output_type: inline

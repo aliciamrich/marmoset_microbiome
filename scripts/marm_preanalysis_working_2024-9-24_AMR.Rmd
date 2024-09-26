@@ -1,0 +1,1899 @@
+---
+title: "marm_analysis_v2_working_2024-9-14_SA"
+author: "Shayda"
+date: "`r Sys.Date()`"
+output:
+  bookdown::html_document2:
+    css: "microbiome.css"
+    toc: true
+    toc_location: "before"
+    toc_depth: 4
+    number_sections: false
+    toc_float: true
+    code_folding: "hide"
+    fig_caption: true
+    bibliography: ["/Users/aliciamrich/RStudioMacbook/Bibliographies/loris_mb.bib"]
+  link_citations: true
+  csl: ["/Users/aliciamrich/RStudioMacbook/Bibliographies/plos.csl"]
+params:
+  seqrun:   "hdz11"
+  date: !r Sys.Date()
+  day1:     "2023-10-25"
+  min_length: 1000
+  max_length: 2000
+  min_qual: 7
+  min_id: 85
+  min_cov: 80
+  ntaxa: 12
+  kit_name: "SQK-16S114-24"
+  model: "dna_r10.4.1_e8.2_400bps_sup@v5.0.0"
+  work_dir: "/work/richlab/aliciarich/loris_mb/tree_build/reduced_references"
+  local: "/Users/arich/Library/CloudStorage/GoogleDrive-aliciamrich@gmail.com/Other computers/My MacBook Pro/RStudioMacbook/GitRepos/marmoset_microbiome/"
+  taxonomy.ordered: [superkingdom,
+                     phylum,
+                     class,
+                     order,
+                     family,
+                     genus,
+                     species]
+
+editor_options: 
+  chunk_output_type: inline
+  
+  
+---
+<style>
+.swan-chunk {
+  border: 1px solid #ccc;
+  padding: 10px;
+  margin: 10px 0;
+  background-color: #f9f9f9;
+  font-family: monospace;
+  white-space: pre;
+}
+</style>
+
+
+# Prepare Script
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+source(paste0(params$local, "dependencies/R/setup.R"))
+source(paste0(params$local, "dependencies/R/microeco_setup.R"))
+```
+
+# Metadata
+```{r}
+samples <- read.recent.version.csv("data", "marm_metadata_") %>%
+  mutate(subj_day   = str_glue("{subject}", "{study_day}")) %>%
+  arrange(study_day, subject) %>%
+  mutate(subj_day = factor(subj_day, ordered = T)) 
+samples$collection <- as.Date(samples$collection, format = "%Y-%m-%d")
+samples$subject <- as.factor(samples$subject)
+samples$room <- as.factor(samples$room)
+samples$origin <- as.factor(samples$origin)
+samples$group <- as.factor(samples$group)
+samples$diet_trial <- as.factor(samples$diet_trial)
+samples$group_phase <- as.factor(samples$group_phase)
+samples$bristol <- as.factor(samples$bristol)
+samples$stabilizer <- as.factor(samples$stabilizer)
+samples$gum_ml <- as.factor(samples$gum_ml)
+samples$sex <- as.factor(samples$sex)
+samples$seqrun <- as.factor(samples$seqrun)
+
+samples %>% 
+  head() %>%  # Just to see if the pipeline works until this point
+  mutate(subj_rm = factor(interaction(subject, room)),
+         subj_phse = factor(interaction(subject, group_phase)),
+         subj_trl = factor(interaction(subject, diet_trial))) %>%
+  dplyr::select(sampleID,
+                alias,
+                study_day,
+                collection,
+                subject,
+                room,
+                seqrun,
+                origin,
+                sex,
+                stabilizer,
+                group,
+                diet_trial,
+                gum_ml,
+                group_phase,
+                bristol,
+                subj_day) %>%
+  arrange(subject, study_day)
+
+samples.list <- samples %>% dplyr::select(sampleID) %>% distinct()
+```
+# List of Aliases
+
+```{r}
+abundance.files <- list.files(path = paste0(params$local, "data/"),
+  pattern = "*_abundance_table_species.tsv$", full.names = TRUE)
+
+abundance <- tibble()
+
+if (length(abundance.files) > 0) {
+  abundance <- read.tables(abundance.files[[1]]) %>%
+               dplyr::select(-c(starts_with("total"))) %>%
+               rename_with(~gsub(".", "-", .x, fixed = TRUE)) %>%
+               fix.strings() 
+  
+  if (length(abundance.files) > 1) {
+    for (i in 2:length(abundance.files)) {
+      temp_data <- read.tables(abundance.files[[i]]) %>%
+                   dplyr::select(-c(starts_with("total")))
+      
+      abundance <- full_join(abundance, temp_data) %>%
+                   rename_with(~gsub(".", "-", .x, fixed = TRUE)) %>%
+                   fix.strings() 
+    }
+  }
+} else {
+  stop("No abundance files found")
+}
+
+```
+# Alignment Files
+```{r}
+filenames <- abundance %>% 
+  dplyr::select(starts_with("HAM"), 
+         starts_with("HER"),
+         starts_with("JAR"),
+         starts_with("OPH"),
+         starts_with("KUB"),
+         starts_with("KOR"),
+         starts_with("WOL"),
+         starts_with("IRI"),
+         starts_with("GOO"),
+         starts_with("LAM"),
+         starts_with("FRA"),
+         starts_with("IVY"),
+         starts_with("CHA"),
+         starts_with("PAD"),
+         starts_with("GRO"),
+         starts_with("MAR"),
+         starts_with("BUD"),
+         starts_with("JOA"),
+         starts_with("HEN"),
+         starts_with("GIN"),
+         starts_with("CM")) %>%
+  pivot_longer(cols = starts_with("HAM") |
+                     starts_with("HER") |
+                     starts_with("JAR") |
+                     starts_with("OPH") |
+                     starts_with("KUB") |
+                     starts_with("KOR") |
+                     starts_with("WOL") |
+                     starts_with("IRI") |
+                     starts_with("GOO") |
+                     starts_with("LAM") |
+                     starts_with("FRA") |
+                     starts_with("IVY") |
+                     starts_with("CHA") |
+                     starts_with("PAD") |
+                     starts_with("GRO") |
+                     starts_with("MAR") |
+                     starts_with("BUD") |
+                     starts_with("JOA") |
+                     starts_with("HEN") |
+                     starts_with("GIN") |
+                     starts_with("CM"),
+               names_to = "alias",
+               values_to = "abundance") %>%
+  dplyr::select(alias) %>%
+  distinct() %>%
+  arrange(alias) %>%
+  mutate(file_append = row_number() - 1) %>%
+  mutate(old_name = if_else(file_append == 0, 
+                            "wf-metagenomics-alignment.csv",
+                            str_glue("wf-metagenomics-alignment (", "{file_append}", ").csv")),
+         new_name = str_glue("{alias}", "_wf-metagenomics-alignment.csv"),
+         .keep = "none")
+
+export.list(filenames, "sampleid_files")
+```
+
+# New Material
+
+## Use Local Terminal
+
+```{terminal}
+target_dir=paste0(params$local, "refs")
+downloads="/Users/aliciamrich/Downloads"
+
+cd $downloads
+
+while IFS=$'\t' read -r old_name new_name; do
+    mv "$old_name" "$target_dir/$new_name"
+done < "$target_dir/sampleid_files.txt"
+```
+
+## Back to R Console
+
+```{r read in alignments, warning=F}
+alignment.files.list <- list.files(path = paste0(params$local, "data/"),
+  pattern = "*_wf-metagenomics-alignment.csv$", full.names = TRUE)
+alignment.files      <- lapply(alignment.files.list, read_alignment_file)
+alias                <- str_extract(alignment.files.list, "hdz-.+(?=_wf-metagenomics-alignment.csv$)")
+
+alignment.files      <- Map(function(df, id) {
+  df$alias           <- id
+  return(df)
+}, alignment.files, alias)
+
+alignments.long        <- bind_rows(alignment.files) %>%
+                       as_tibble() %>% fix.strings()  %>% 
+                        select(ref,
+                               taxid,
+                               species,
+                               genus,
+                               family,
+                               order,
+                               class,
+                               phylum,
+                               superkingdom,
+                               alias,
+                               coverage,
+                               n_reads = number.of.reads) %>%
+                        filter(coverage >= 80 & !is.na(alias)) %>%
+                        mutate(sampleID = str_sub(alias, 1L, 7L)) %>%
+                        semi_join(samples.list, by=join_by(sampleID)) %>%
+                        left_join(select(samples, sampleID, subj_day), by = join_by(sampleID)) %>%
+                        group_by(ref,
+                                 taxid,
+                                 species,
+                                 genus,
+                                 family,
+                                 order,
+                                 class,
+                                 phylum,
+                                 superkingdom,
+                                 subj_day) %>%
+                        summarize(samp_cov     = mean(coverage),
+                                  samp_n_reads = mean(n_reads)) %>% ungroup()
+
+alignments.refs <- alignments.long %>% 
+                        group_by(ref,
+                                 taxid,
+                                 species,
+                                 genus,
+                                 family,
+                                 order,
+                                 class,
+                                 phylum,
+                                 superkingdom) %>%
+                        summarize(ref_n_reads   = round(sum(samp_n_reads),  digits = 2),
+                                  ref_mean_cov  = round(mean(samp_cov),     digits = 2)) %>%
+                        ungroup() %>% group_by(species,
+                                               genus,
+                                               family,
+                                               order,
+                                               class,
+                                               phylum,
+                                               superkingdom) %>%
+                        arrange(species, desc(ref_n_reads), desc(ref_mean_cov)) %>%
+                        mutate(ref_order       = row_number(),
+                               tax_total_count = sum(ref_n_reads)) %>%
+                        ungroup() %>%
+                        filter(ref_order == 1) %>%
+                        select(-ref_order) %>% sort.taxa()
+
+alignments    <- alignments.long %>% 
+                        group_by(superkingdom,
+                                 phylum,
+                                 class,
+                                 order,
+                                 family,
+                                 genus,
+                                 species,
+                                 subj_day) %>%
+                          summarize(counts = sum(samp_n_reads)) %>%
+                          ungroup() %>%
+                          left_join(alignments.refs,
+                    by = join_by(superkingdom,
+                                 phylum,
+                                 class,
+                                 order,
+                                 family,
+                                 genus,
+                                 species)) %>%
+                    pivot_wider(id_cols    = c(ref,
+                                               taxid,
+                                               params$taxonomy.ordered,
+                                               ref_mean_cov),
+                                names_from  = subj_day,
+                                values_from = counts) %>%
+                    sort.taxa() %>%
+                    mutate(across(where(is.numeric), ~replace_na(.x, 0)),
+                           organism = str_glue("txid", "{taxid}")) 
+```
+
+# Alignments
+
+```{r}
+alignment.files.list <- list.files(path = paste0(params$local, "data"), pattern = "*_wf-metagenomics-alignment.csv$", full.names = TRUE)
+alignment.files      <- lapply(alignment.files.list, read_alignment_file)
+alias                <- str_extract(alignment.files.list, "(?<=data/)\\w+-.+(?=_wf-metagenomics-alignment.csv$)")
+
+alignment.files <- Map(function(df, id) {
+  if (nrow(df) > 0) {
+    df$alias <- id
+  } else {
+    warning(paste("Data frame for", id, "is empty. Alias not assigned."))
+  }
+  return(df)
+}, alignment.files, alias)
+```
+
+```{r}
+alignments.long <- alignment.files %>%
+  Filter(function(df) nrow(df) > 0, .) %>%
+  bind_rows() %>%
+  as_tibble() %>% fix.strings()  %>% 
+                        select(ref,
+                               taxid,
+                               species,
+                               genus,
+                               family,
+                               order,
+                               class,
+                               phylum,
+                               superkingdom,
+                               alias,
+                               coverage,
+                               n_reads = number.of.reads)  %>%
+                        filter(coverage >= 80 & !is.na(alias)) %>%
+                        mutate(sampleID = str_sub(alias, 1L, 10L)) %>%
+                        semi_join(samples.list, by=join_by(sampleID)) %>%
+                        left_join(select(samples, sampleID, subj_day), by = join_by(sampleID)) %>%
+                        group_by(ref,
+                                 taxid,
+                                 species,
+                                 genus,
+                                 family,
+                                 order,
+                                 class,
+                                 phylum,
+                                 superkingdom,
+                                 subj_day) %>%
+                        summarize(samp_cov     = mean(coverage),
+                                  samp_n_reads = mean(n_reads)) %>% ungroup()
+```
+
+```{r}
+alignments.refs <- alignments.long %>% 
+                        group_by(ref,
+                                 taxid,
+                                 species,
+                                 genus,
+                                 family,
+                                 order,
+                                 class,
+                                 phylum,
+                                 superkingdom) %>%
+                        summarize(ref_n_reads   = round(sum(samp_n_reads),  digits = 2),
+                                  ref_mean_cov  = round(mean(samp_cov),     digits = 2)) %>%
+                        ungroup() %>% group_by(species,
+                                               genus,
+                                               family,
+                                               order,
+                                               class,
+                                               phylum,
+                                               superkingdom) %>%
+                        arrange(species, desc(ref_n_reads), desc(ref_mean_cov)) %>%
+                        mutate(ref_order       = row_number(),
+                               tax_total_count = sum(ref_n_reads)) %>%
+                        ungroup() %>%
+                        filter(ref_order == 1) %>%
+                        select(-ref_order) %>% sort.taxa()
+```
+
+
+```{r}
+alignments    <- alignments.long %>% 
+                        group_by(superkingdom,
+                                 phylum,
+                                 class,
+                                 order,
+                                 family,
+                                 genus,
+                                 species,
+                                 subj_day) %>%
+                          summarize(counts = sum(samp_n_reads)) %>%
+                          ungroup() %>%
+                          left_join(alignments.refs,
+                    by = join_by(superkingdom,
+                                 phylum,
+                                 class,
+                                 order,
+                                 family,
+                                 genus,
+                                 species)) %>%
+                    pivot_wider(id_cols    = c(ref,
+                                               taxid,
+                                               params$taxonomy.ordered,
+                                               ref_mean_cov),
+                                names_from  = subj_day,
+                                values_from = counts) %>%
+                    sort.taxa() %>%
+                    mutate(across(where(is.numeric), ~replace_na(.x, 0)),
+                           organism = str_glue("txid", "{taxid}")) 
+
+```
+
+# Update Reference Tree & FASTA
+
+>ONT Reads are generally still too messy and long to smoothly produce consensus sequences for each taxon, so instead, we will use Entrez Direct to source a reference fasta for each of the references that minimap2 already matched to our reads.
+
+## Choose your Path {.tabset}
+
+### Export Complete List of Reference Taxa
+
+```{r}
+all.refs          <- alignments %>% 
+                     select(ref, organism) %>% distinct()
+
+export.list(all.refs, "fetch_references")
+```
+
+
+### Check Previous Taxonomy List First
+
+```{r eval=FALSE}
+rep.seqs.previous <- read.fasta(paste0(params$local, "refs/abund_refseqs_aligned.fasta"))
+
+rep.seqs.txids    <- tibble(getName(rep.seqs.previous)) %>% 
+  mutate(organism  =        getName(rep.seqs.previous)) %>% 
+  mutate(taxid     = as.numeric(str_remove_all(organism, "[^\\d]"))) %>%
+  select(taxid)
+
+new.refs          <- alignments %>% anti_join(rep.seqs.txids) %>% 
+                     select(ref, organism) %>% distinct()
+
+export.list(new.refs, "fetch_references")
+```
+
+## Fetch New References Using Entrez Direct
+
+### Job Options {.tabset}
+
+#### Interactive Job
+
+```{r}
+open.job("fetch", "200", "1", "1")
+```
+
+#### Batch Header
+
+```{swan}
+#!/bin/bash
+#SBATCH --time=1:00:00
+#SBATCH --job-name=fetch_refs
+#SBATCH --error=fetch_refs.%J.err
+#SBATCH --output=fetch_refs.%J.out
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --mem=200GB
+#SBATCH --partition=guest
+
+module purge
+
+```
+
+#### Code
+
+```{r}
+load.pkg("entrez-direct", "")
+load.pkg("seqkit", "")
+```
+
+```{swan}
+uid_file="fetch_references.txt"
+accessions_file="accessions.txt"
+fasta_file="abund_refseqs_new.fasta"
+renamed_fasta="abund_refseqs_new_renamed.fasta"
+
+> "$fasta_file"
+
+cut -f1 "$uid_file" > "$accessions_file"
+
+if efetch -db nuccore -input "$accessions_file" -format fasta -email "aliciarich@unomaha.edu" > "$fasta_file"; then
+    echo "Sequences fetched successfully."
+else
+    echo "Error fetching sequences." >&2
+    exit 1
+fi
+
+seqkit replace $fasta_file -p '^(\S+)(.+?)$' -r '{kv}$2' -k $uid_file -o $renamed_fasta
+
+rm $fasta_file
+mv $renamed_fasta $fasta_file
+```
+
+## Choose Your Path {.tabset}
+
+### Prepare to Align All References without Joining First
+
+```{swan}
+input_fasta="refs/refseqs_toalign.fasta"
+mv $fasta_file $input_fasta
+```
+
+### Join New References to Old FASTA before Alignment
+```{r, eval=F}
+new.refseqs <- read.fasta(paste0(params$local, "refs/abund_refseqs_new.fasta"))
+
+merged.refseqs <- c(new.refseqs, rep.seqs.previous)
+
+write.fasta(sequences =       merged.refseqs,
+            names     = names(merged.refseqs),
+            file.out  = paste0(params$local, "refs/refseqs_toalign.fasta"))
+```
+
+
+## Proceed to Alignment Step
+
+### Job Options {.tabset}
+
+##### Interactive Job
+
+```{r}
+open.job("tree", "250", "3", "1")
+```
+
+##### Batch Header
+
+```{swan}
+#!/bin/bash
+#SBATCH --time=3:00:00
+#SBATCH --job-name=align_tree
+#SBATCH --error=logs/align_tree.%J.err
+#SBATCH --output=logs/align_tree.%J.out
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --mem=250GB
+#SBATCH --partition=guest
+
+module purge
+
+```
+
+#### Code
+
+```{r}
+load.pkg("mafft", "")
+load.pkg("fasttree", "")
+```
+
+```{swan}
+input_fasta="refs/refseqs_toalign.fasta"
+aligned_fasta="refs/abund_refseqs_aligned.fasta"
+tree_file="refs/repseqs_tree.newick"
+
+mafft --auto $input_fasta > $aligned_fasta
+
+FastTree -nt $aligned_fasta > $tree_file
+```
+
+
+# Prepare Dataset for Analysis
+
+## Read in New Phylogenetic Tree & Representative FASTA
+
+```{r}
+tax.tree <- read.tree(paste0(params$local, "refs/repseqs_tree.newick"))
+rep.seqs <- read.fasta(paste0(params$local, "refs/abund_refseqs_aligned.fasta"))
+```
+
+
+## Taxonomy Table
+
+```{r}
+tax.table <- alignments %>% 
+                            column_to_rownames("organism") %>%
+                            select(params$taxonomy.ordered) %>% 
+                            sort.taxa() %>%
+                            rename_with(~str_to_title(.x), .cols = everything()) %>%
+                            mutate(Kingdom = Superkingdom, .keep = "unused") %>%
+                            relocate(Kingdom) %>%
+                            distinct() %>%
+                tidy_taxonomy()
+```
+
+### Back Up Taxonomy Table
+
+```{r}
+taxonomy.list <- alignments %>% 
+                            select(organism, params$taxonomy.ordered) %>% 
+                            sort.taxa() %>%
+                            rename_with(~str_to_title(.x), .cols = everything()) %>%
+                            mutate(Kingdom = Superkingdom, .keep = "unused") %>%
+                            relocate(Organism, Kingdom)
+
+backup.df(taxonomy.list, "taxonomy_list")
+```
+
+
+
+# OTU Table
+```{r}
+otu.table <- alignments %>%
+  dplyr::select(organism, matches("^[A-Za-z]+\\d+$")) %>%
+  mutate(organism = make.unique(as.character(organism))) %>%
+  column_to_rownames("organism")
+
+otu.samples <- otu.table %>% pivot_longer(matches("^[A-Za-z]+\\d+$"),
+                                          names_to  = "subj_day",
+                                          values_to = "counts") %>%
+                            dplyr::select(subj_day) %>% arrange(subj_day) %>% distinct()
+```
+
+# Sample Table
+```{r}
+sample.table <- samples  %>% dplyr::select(-c(alias, sampleID)) %>%
+                            distinct(subj_day, .keep_all = T) %>%
+                            semi_join(otu.samples, by = join_by(subj_day)) %>%
+                            arrange(study_day, subject) %>%
+                            column_to_rownames("subj_day")
+```
+```{r}
+sample.table <- sample.table %>%
+                            mutate(trl.num = case_when(diet_trial   == "run-in"          ~ 01,
+                                                       diet_trial   == "intervention_1"  ~ 02,
+                                                       diet_trial   == "washout_1"       ~ 03,
+                                                       diet_trial   == "intervention_2"  ~ 04,
+                                                       diet_trial   == "washout_2"       ~ 05),
+                                   subj.num = case_when(subject     == "hamlet"          ~ 01,
+                                                        subject     == "hera"            ~ 02,
+                                                        subject     == "jarjarbinks"     ~ 03,
+                                                        subject     == "ophelia"         ~ 04,
+                                                        subject     == "kubo"            ~ 05,
+                                                        subject     == "korra"           ~ 06,
+                                                        subject     == "wolverine"       ~ 07,
+                                                        subject     == "iris"            ~ 08,
+                                                        subject     == "goose"           ~ 09, 
+                                                        subject     == "lambchop"        ~ 10,
+                                                        subject     == "franc"           ~ 11,
+                                                        subject     == "ivy"             ~ 12,
+                                                        subject     == "charles"         ~ 13,
+                                                        subject     == "padme"           ~ 14,
+                                                        subject     == "grogu"           ~ 15,
+                                                        subject     == "marshmallow"     ~ 16,
+                                                        subject     == "buddy"           ~ 17, 
+                                                        subject     == "joans"           ~ 18,
+                                                        subject     == "henry"           ~ 19, 
+                                                        subject     == "ginger"          ~ 20),
+                                   rm.num  = case_when(room         == "B"               ~ 01,
+                                                       room         == "F"               ~ 02),
+                                   phs.num  = case_when(group_phase == "baseline"        ~ 01,
+                                                        group_phase == "gum"             ~ 02,
+                                                        group_phase == "gum-washout"     ~ 03,
+                                                        group_phase == "control"         ~ 04,
+                                                        group_phase == "control-washout" ~ 05))
+```
+#OTU Subsets
+```{r}
+otu.ham     <-  otu.table    %>% dplyr::select(starts_with("hamlet"))
+samples.ham <-  sample.table %>% filter(subject  == "hamlet") %>%
+                  dplyr::select(-c(starts_with("subj_")))
+
+otu.her     <-  otu.table    %>% dplyr::select(starts_with("hera"))
+samples.her <-  sample.table %>% filter(subject  == "hera") %>%
+                  dplyr::select(-c(starts_with("subj_")))
+
+otu.jar     <-  otu.table    %>% dplyr::select(starts_with("jarjarbinks"))
+samples.jar <-  sample.table %>% filter(subject  == "jarjarbinks") %>%
+                  dplyr::select(-c(starts_with("subj_")))
+
+otu.oph     <-  otu.table    %>% dplyr::select(starts_with("ophelia"))
+samples.oph <-  sample.table %>% filter(subject  == "ophelia") %>%
+                  dplyr::select(-c(starts_with("subj_")))
+
+otu.kub     <-  otu.table    %>% dplyr::select(starts_with("kubo"))
+samples.kub <-  sample.table %>% filter(subject  == "kubo") %>%
+                  dplyr::select(-c(starts_with("subj_")))
+
+otu.kor     <-  otu.table    %>% dplyr::select(starts_with("korra"))
+samples.kor <-  sample.table %>% filter(subject  == "korra") %>%
+                  dplyr::select(-c(starts_with("subj_")))
+
+otu.wol     <-  otu.table    %>% dplyr::select(starts_with("wolverine"))
+samples.wol <-  sample.table %>% filter(subject  == "wolverine") %>%
+                  dplyr::select(-c(starts_with("subj_")))
+
+otu.iri     <-  otu.table    %>% dplyr::select(starts_with("iris"))
+samples.iri <-  sample.table %>% filter(subject  == "iris") %>%
+                  dplyr::select(-c(starts_with("subj_")))
+
+otu.goo     <-  otu.table    %>% dplyr::select(starts_with("goose"))
+samples.goo <-  sample.table %>% filter(subject  == "goose") %>%
+                  dplyr::select(-c(starts_with("subj_")))
+
+otu.lam     <-  otu.table    %>% dplyr::select(starts_with("lambchop"))
+samples.lam <-  sample.table %>% filter(subject  == "lambchop") %>%
+                  dplyr::select(-c(starts_with("subj_")))
+
+otu.fra     <-  otu.table    %>% dplyr::select(starts_with("franc"))
+samples.fra <-  sample.table %>% filter(subject  == "franc") %>%
+                  dplyr::select(-c(starts_with("subj_")))
+
+otu.ivy     <-  otu.table    %>% dplyr::select(starts_with("ivy"))
+samples.ivy <-  sample.table %>% filter(subject  == "ivy") %>%
+                  dplyr::select(-c(starts_with("subj_")))
+
+otu.cha     <-  otu.table    %>% dplyr::select(starts_with("charles"))
+samples.cha <-  sample.table %>% filter(subject  == "charles") %>%
+                  dplyr::select(-c(starts_with("subj_")))
+
+otu.pad     <-  otu.table    %>% dplyr::select(starts_with("padme"))
+samples.pad <-  sample.table %>% filter(subject  == "padme") %>%
+                  dplyr::select(-c(starts_with("subj_")))
+
+otu.gro     <-  otu.table    %>% dplyr::select(starts_with("grogu"))
+samples.gro <-  sample.table %>% filter(subject  == "grogu") %>%
+                  dplyr::select(-c(starts_with("subj_")))
+
+otu.mar     <-  otu.table    %>% dplyr::select(starts_with("marshmallow"))
+samples.mar <-  sample.table %>% filter(subject  == "marshmallow") %>%
+                  dplyr::select(-c(starts_with("subj_")))
+
+otu.bud     <-  otu.table    %>% dplyr::select(starts_with("buddy"))
+samples.bud <-  sample.table %>% filter(subject  == "buddy") %>%
+                  dplyr::select(-c(starts_with("subj_")))
+
+otu.joa     <-  otu.table    %>% dplyr::select(starts_with("joans"))
+samples.joa <-  sample.table %>% filter(subject  == "joans") %>%
+                  dplyr::select(-c(starts_with("subj_")))
+
+otu.hen     <-  otu.table    %>% dplyr::select(starts_with("henry"))
+samples.hen <-  sample.table %>% filter(subject  == "henry") %>%
+                  dplyr::select(-c(starts_with("subj_")))
+
+otu.gin     <-  otu.table    %>% dplyr::select(starts_with("ginger"))
+samples.gin <-  sample.table %>% filter(subject  == "ginger") %>%
+                  dplyr::select(-c(starts_with("subj_")))
+```
+```{r}
+samp.order.main <- factor(rownames(sample.table), ordered = T)
+samp.order.ham <- factor(rownames(samples.ham), ordered = T)
+samp.order.her <- factor(rownames(samples.her), ordered = T)
+samp.order.jar <- factor(rownames(samples.jar), ordered = T)
+samp.order.oph <- factor(rownames(samples.oph), ordered = T)
+samp.order.kub <- factor(rownames(samples.kub), ordered = T)
+samp.order.kor <- factor(rownames(samples.kor), ordered = T)
+samp.order.wol <- factor(rownames(samples.wol), ordered = T)
+samp.order.iri <- factor(rownames(samples.iri), ordered = T)
+samp.order.goo <- factor(rownames(samples.goo), ordered = T)
+samp.order.lam <- factor(rownames(samples.lam), ordered = T)
+samp.order.fra <- factor(rownames(samples.fra), ordered = T)
+samp.order.ivy <- factor(rownames(samples.ivy), ordered = T)
+samp.order.cha <- factor(rownames(samples.cha), ordered = T)
+samp.order.pad <- factor(rownames(samples.pad), ordered = T)
+samp.order.gro <- factor(rownames(samples.gro), ordered = T)
+samp.order.mar <- factor(rownames(samples.mar), ordered = T)
+samp.order.bud <- factor(rownames(samples.bud), ordered = T)
+samp.order.joa <- factor(rownames(samples.joa), ordered = T)
+samp.order.hen <- factor(rownames(samples.hen), ordered = T)
+samp.order.gin <- factor(rownames(samples.gin), ordered = T)
+```
+# MicroEco
+```{r}
+dataset.main  <- microtable$new(
+                               sample_table = sample.table,
+                               otu_table    = otu.table,
+                               tax_table    = tax.table,
+                               phylo_tree   = tax.tree,
+                               rep_fasta    = rep.seqs,
+                               auto_tidy    = T)
+dataset.ham <- microtable$new(
+                               sample_table = samples.ham,
+                               otu_table    = otu.ham,
+                               tax_table    = tax.table,
+                               phylo_tree   = tax.tree,
+                               rep_fasta    = rep.seqs,
+                               auto_tidy    = T)
+dataset.her <- microtable$new(
+                               sample_table = samples.her,
+                               otu_table    = otu.her,
+                               tax_table    = tax.table,
+                               phylo_tree   = tax.tree,
+                               rep_fasta    = rep.seqs,
+                               auto_tidy    = T)
+dataset.jar <- microtable$new(
+                               sample_table = samples.jar,
+                               otu_table    = otu.jar,
+                               tax_table    = tax.table,
+                               phylo_tree   = tax.tree,
+                               rep_fasta    = rep.seqs,
+                               auto_tidy    = T)
+dataset.oph <- microtable$new(
+                               sample_table = samples.oph,
+                               otu_table    = otu.oph,
+                               tax_table    = tax.table,
+                               phylo_tree   = tax.tree,
+                               rep_fasta    = rep.seqs,
+                               auto_tidy    = T)
+dataset.kub <- microtable$new(
+                               sample_table = samples.kub,
+                               otu_table    = otu.kub,
+                               tax_table    = tax.table,
+                               phylo_tree   = tax.tree,
+                               rep_fasta    = rep.seqs,
+                               auto_tidy    = T)
+dataset.kor <- microtable$new(
+                               sample_table = samples.kor,
+                               otu_table    = otu.kor,
+                               tax_table    = tax.table,
+                               phylo_tree   = tax.tree,
+                               rep_fasta    = rep.seqs,
+                               auto_tidy    = T)
+dataset.wol <- microtable$new(
+                               sample_table = samples.wol,
+                               otu_table    = otu.wol,
+                               tax_table    = tax.table,
+                               phylo_tree   = tax.tree,
+                               rep_fasta    = rep.seqs,
+                               auto_tidy    = T)
+dataset.iri <- microtable$new(
+                               sample_table = samples.iri,
+                               otu_table    = otu.iri,
+                               tax_table    = tax.table,
+                               phylo_tree   = tax.tree,
+                               rep_fasta    = rep.seqs,
+                               auto_tidy    = T)
+dataset.goo <- microtable$new(
+                               sample_table = samples.goo,
+                               otu_table    = otu.goo,
+                               tax_table    = tax.table,
+                               phylo_tree   = tax.tree,
+                               rep_fasta    = rep.seqs,
+                               auto_tidy    = T)
+dataset.lam <- microtable$new(
+                               sample_table = samples.lam,
+                               otu_table    = otu.lam,
+                               tax_table    = tax.table,
+                               phylo_tree   = tax.tree,
+                               rep_fasta    = rep.seqs,
+                               auto_tidy    = T)
+dataset.fra <- microtable$new(
+                               sample_table = samples.fra,
+                               otu_table    = otu.fra,
+                               tax_table    = tax.table,
+                               phylo_tree   = tax.tree,
+                               rep_fasta    = rep.seqs,
+                               auto_tidy    = T)
+dataset.ivy <- microtable$new(
+                               sample_table = samples.ivy,
+                               otu_table    = otu.ivy,
+                               tax_table    = tax.table,
+                               phylo_tree   = tax.tree,
+                               rep_fasta    = rep.seqs,
+                               auto_tidy    = T)
+dataset.cha <- microtable$new(
+                               sample_table = samples.cha,
+                               otu_table    = otu.cha,
+                               tax_table    = tax.table,
+                               phylo_tree   = tax.tree,
+                               rep_fasta    = rep.seqs,
+                               auto_tidy    = T)
+dataset.pad <- microtable$new(
+                               sample_table = samples.pad,
+                               otu_table    = otu.pad,
+                               tax_table    = tax.table,
+                               phylo_tree   = tax.tree,
+                               rep_fasta    = rep.seqs,
+                               auto_tidy    = T)
+dataset.gro <- microtable$new(
+                               sample_table = samples.gro,
+                               otu_table    = otu.gro,
+                               tax_table    = tax.table,
+                               phylo_tree   = tax.tree,
+                               rep_fasta    = rep.seqs,
+                               auto_tidy    = T)
+dataset.mar <- microtable$new(
+                               sample_table = samples.mar,
+                               otu_table    = otu.mar,
+                               tax_table    = tax.table,
+                               phylo_tree   = tax.tree,
+                               rep_fasta    = rep.seqs,
+                               auto_tidy    = T)
+dataset.bud <- microtable$new(
+                               sample_table = samples.bud,
+                               otu_table    = otu.bud,
+                               tax_table    = tax.table,
+                               phylo_tree   = tax.tree,
+                               rep_fasta    = rep.seqs,
+                               auto_tidy    = T)
+dataset.joa <- microtable$new(
+                               sample_table = samples.joa,
+                               otu_table    = otu.joa,
+                               tax_table    = tax.table,
+                               phylo_tree   = tax.tree,
+                               rep_fasta    = rep.seqs,
+                               auto_tidy    = T)
+dataset.hen <- microtable$new(
+                               sample_table = samples.hen,
+                               otu_table    = otu.hen,
+                               tax_table    = tax.table,
+                               phylo_tree   = tax.tree,
+                               rep_fasta    = rep.seqs,
+                               auto_tidy    = T)
+dataset.gin <- microtable$new(
+                               sample_table = samples.gin,
+                               otu_table    = otu.gin,
+                               tax_table    = tax.table,
+                               phylo_tree   = tax.tree,
+                               rep_fasta    = rep.seqs,
+                               auto_tidy    = T)
+```
+```{r}
+dataset.main$rarefy_samples(method = "SRS", sample.size = 7000)
+dataset.ham$rarefy_samples(method = "SRS", sample.size = 7000)
+dataset.her$rarefy_samples(method = "SRS", sample.size = 7000)
+dataset.jar$rarefy_samples(method = "SRS", sample.size = 7000)
+dataset.oph$rarefy_samples(method = "SRS", sample.size = 7000)
+dataset.kub$rarefy_samples(method = "SRS", sample.size = 7000)
+dataset.kor$rarefy_samples(method = "SRS", sample.size = 7000)
+dataset.wol$rarefy_samples(method = "SRS", sample.size = 7000)
+dataset.iri$rarefy_samples(method = "SRS", sample.size = 7000)
+dataset.goo$rarefy_samples(method = "SRS", sample.size = 7000)
+dataset.lam$rarefy_samples(method = "SRS", sample.size = 7000)
+dataset.fra$rarefy_samples(method = "SRS", sample.size = 7000)
+dataset.ivy$rarefy_samples(method = "SRS", sample.size = 7000)
+dataset.cha$rarefy_samples(method = "SRS", sample.size = 7000)
+dataset.pad$rarefy_samples(method = "SRS", sample.size = 7000)
+dataset.gro$rarefy_samples(method = "SRS", sample.size = 7000)
+dataset.mar$rarefy_samples(method = "SRS", sample.size = 7000)
+dataset.bud$rarefy_samples(method = "SRS", sample.size = 7000)
+dataset.joa$rarefy_samples(method = "SRS", sample.size = 7000)
+dataset.hen$rarefy_samples(method = "SRS", sample.size = 7000)
+dataset.gin$rarefy_samples(method = "SRS", sample.size = 7000)
+```
+## Basic Stats
+### Calculate Relative Abundances
+
+>This will replace our raw read counts with relative abundance values and store them in our OTU table. Then we will be able to do additional data cleaning based on relative abundances.
+
+```{r}
+dataset.main$cal_abund()
+dataset.ham$cal_abund()
+dataset.her$cal_abund()
+dataset.jar$cal_abund()
+dataset.oph$cal_abund()
+dataset.kub$cal_abund()
+dataset.kor$cal_abund()
+dataset.wol$cal_abund()
+dataset.iri$cal_abund()
+dataset.goo$cal_abund()
+dataset.lam$cal_abund()
+dataset.fra$cal_abund()
+dataset.ivy$cal_abund()
+dataset.cha$cal_abund()
+dataset.pad$cal_abund()
+dataset.gro$cal_abund()
+dataset.mar$cal_abund()
+dataset.bud$cal_abund()
+dataset.joa$cal_abund()
+dataset.hen$cal_abund()
+dataset.gin$cal_abund()
+```
+### Filter Low Abundance Taxa
+
+>Now we want to remove all taxa with extremely low abundances (0.001%) so that they are not giving us muddy results.
+>We are also removing taxa that appear in less than 1% of all samples.
+
+```{r}
+dataset.main$filter_taxa(rel_abund = 0.00001, freq = 0.01, include_lowest = TRUE)
+dataset.ham$filter_taxa(rel_abund = 0.00001, freq = 0.01, include_lowest = TRUE)
+dataset.her$filter_taxa(rel_abund = 0.00001, freq = 0.01, include_lowest = TRUE)
+dataset.jar$filter_taxa(rel_abund = 0.00001, freq = 0.01, include_lowest = TRUE)
+dataset.oph$filter_taxa(rel_abund = 0.00001, freq = 0.01, include_lowest = TRUE)
+dataset.kub$filter_taxa(rel_abund = 0.00001, freq = 0.01, include_lowest = TRUE)
+dataset.kor$filter_taxa(rel_abund = 0.00001, freq = 0.01, include_lowest = TRUE)
+dataset.wol$filter_taxa(rel_abund = 0.00001, freq = 0.01, include_lowest = TRUE)
+dataset.iri$filter_taxa(rel_abund = 0.00001, freq = 0.01, include_lowest = TRUE)
+dataset.goo$filter_taxa(rel_abund = 0.00001, freq = 0.01, include_lowest = TRUE)
+dataset.lam$filter_taxa(rel_abund = 0.00001, freq = 0.01, include_lowest = TRUE)
+dataset.fra$filter_taxa(rel_abund = 0.00001, freq = 0.01, include_lowest = TRUE)
+dataset.ivy$filter_taxa(rel_abund = 0.00001, freq = 0.01, include_lowest = TRUE)
+dataset.cha$filter_taxa(rel_abund = 0.00001, freq = 0.01, include_lowest = TRUE)
+dataset.pad$filter_taxa(rel_abund = 0.00001, freq = 0.01, include_lowest = TRUE)
+dataset.gro$filter_taxa(rel_abund = 0.00001, freq = 0.01, include_lowest = TRUE)
+dataset.mar$filter_taxa(rel_abund = 0.00001, freq = 0.01, include_lowest = TRUE)
+dataset.bud$filter_taxa(rel_abund = 0.00001, freq = 0.01, include_lowest = TRUE)
+dataset.joa$filter_taxa(rel_abund = 0.00001, freq = 0.01, include_lowest = TRUE)
+dataset.hen$filter_taxa(rel_abund = 0.00001, freq = 0.01, include_lowest = TRUE)
+dataset.gin$filter_taxa(rel_abund = 0.00001, freq = 0.01, include_lowest = TRUE)
+```
+### Calculate Diversity Metrics
+
+>Now that we have our cleaned datasets, we can add alpha and beta diversity measures to the objects.
+
+```{r}
+dataset.main$cal_alphadiv()
+dataset.ham$cal_alphadiv()
+dataset.her$cal_alphadiv()
+dataset.jar$cal_alphadiv()
+dataset.oph$cal_alphadiv()
+dataset.kub$cal_alphadiv()
+dataset.kor$cal_alphadiv()
+dataset.wol$cal_alphadiv()
+dataset.iri$cal_alphadiv()
+dataset.goo$cal_alphadiv()
+dataset.lam$cal_alphadiv()
+dataset.fra$cal_alphadiv()
+dataset.ivy$cal_alphadiv()
+dataset.cha$cal_alphadiv()
+dataset.pad$cal_alphadiv()
+dataset.gro$cal_alphadiv()
+dataset.mar$cal_alphadiv()
+dataset.bud$cal_alphadiv()
+dataset.joa$cal_alphadiv()
+dataset.hen$cal_alphadiv()
+dataset.gin$cal_alphadiv()
+
+dataset.main$cal_betadiv(unifrac = T, method = "canberra")
+dataset.ham$cal_betadiv(unifrac = T, method = "canberra")
+dataset.her$cal_betadiv(unifrac = T, method = "canberra")
+dataset.jar$cal_betadiv(unifrac = T, method = "canberra")
+dataset.oph$cal_betadiv(unifrac = T, method = "canberra")
+dataset.kub$cal_betadiv(unifrac = T, method = "canberra")
+dataset.kor$cal_betadiv(unifrac = T, method = "canberra")
+dataset.wol$cal_betadiv(unifrac = T, method = "canberra")
+dataset.iri$cal_betadiv(unifrac = T, method = "canberra")
+dataset.goo$cal_betadiv(unifrac = T, method = "canberra")
+dataset.lam$cal_betadiv(unifrac = T, method = "canberra")
+dataset.fra$cal_betadiv(unifrac = T, method = "canberra")
+dataset.ivy$cal_betadiv(unifrac = T, method = "canberra")
+dataset.cha$cal_betadiv(unifrac = T, method = "canberra")
+```
+
+
+```{r}
+dataset.pad$cal_betadiv(unifrac = T, method = "canberra")
+```
+
+>dataset.pad doesn't work because there aren't enough rows of data. Maybe we should write a function to iterate over these datasets and just skip any with less than 3 rows or something.
+
+```{r}
+dataset.gro$cal_betadiv(unifrac = T, method = "canberra")
+dataset.mar$cal_betadiv(unifrac = T, method = "canberra")
+dataset.bud$cal_betadiv(unifrac = T, method = "canberra")
+dataset.joa$cal_betadiv(unifrac = T, method = "canberra")
+dataset.hen$cal_betadiv(unifrac = T, method = "canberra")
+dataset.gin$cal_betadiv(unifrac = T, method = "canberra")
+```
+## Clone and Merge Datasets at Different Taxonomic Levels
+```{r}
+gen.data.main <- clone(dataset.main, deep = T)
+gen.data.ham <- clone(dataset.ham, deep = T)
+gen.data.her <- clone(dataset.her, deep = T)
+gen.data.jar <- clone(dataset.jar, deep = T)
+gen.data.oph <- clone(dataset.oph, deep = T)
+gen.data.kub <- clone(dataset.kub, deep = T)
+gen.data.kor <- clone(dataset.kor, deep = T)
+gen.data.wol <- clone(dataset.wol, deep = T)
+gen.data.iri <- clone(dataset.iri, deep = T)
+gen.data.goo <- clone(dataset.goo, deep = T)
+gen.data.lam <- clone(dataset.lam, deep = T)
+gen.data.fra <- clone(dataset.fra, deep = T)
+gen.data.ivy <- clone(dataset.ivy, deep = T)
+gen.data.cha <- clone(dataset.cha, deep = T)
+gen.data.pad <- clone(dataset.pad, deep = T)
+gen.data.gro <- clone(dataset.gro, deep = T)
+gen.data.mar <- clone(dataset.mar, deep = T)
+gen.data.bud <- clone(dataset.bud, deep = T)
+gen.data.joa <- clone(dataset.joa, deep = T)
+gen.data.hen <- clone(dataset.hen, deep = T)
+gen.data.gin <- clone(dataset.gin, deep = T)
+
+gen.data.main$merge_taxa(taxa = "Genus")
+gen.data.ham$merge_taxa(taxa = "Genus")
+gen.data.her$merge_taxa(taxa = "Genus")
+gen.data.jar$merge_taxa(taxa = "Genus")
+gen.data.oph$merge_taxa(taxa = "Genus")
+gen.data.kub$merge_taxa(taxa = "Genus")
+gen.data.kor$merge_taxa(taxa = "Genus")
+gen.data.wol$merge_taxa(taxa = "Genus")
+gen.data.iri$merge_taxa(taxa = "Genus")
+gen.data.goo$merge_taxa(taxa = "Genus")
+gen.data.lam$merge_taxa(taxa = "Genus")
+gen.data.fra$merge_taxa(taxa = "Genus")
+gen.data.ivy$merge_taxa(taxa = "Genus")
+gen.data.cha$merge_taxa(taxa = "Genus")
+```
+
+
+```{r}
+gen.data.pad$merge_taxa(taxa = "Genus")
+```
+
+
+```{r}
+gen.data.gro$merge_taxa(taxa = "Genus")
+gen.data.mar$merge_taxa(taxa = "Genus")
+gen.data.bud$merge_taxa(taxa = "Genus")
+gen.data.joa$merge_taxa(taxa = "Genus")
+gen.data.hen$merge_taxa(taxa = "Genus")
+gen.data.gin$merge_taxa(taxa = "Genus")
+```
+```{r}
+fam.data.main <- clone(dataset.main, deep = T)
+fam.data.ham <- clone(dataset.ham, deep = T)
+fam.data.her <- clone(dataset.her, deep = T)
+fam.data.jar <- clone(dataset.jar, deep = T)
+fam.data.oph <- clone(dataset.oph, deep = T)
+fam.data.kub <- clone(dataset.kub, deep = T)
+fam.data.kor <- clone(dataset.kor, deep = T)
+fam.data.wol <- clone(dataset.wol, deep = T)
+fam.data.iri <- clone(dataset.iri, deep = T)
+fam.data.goo <- clone(dataset.goo, deep = T)
+fam.data.lam <- clone(dataset.lam, deep = T)
+fam.data.fra <- clone(dataset.fra, deep = T)
+fam.data.ivy <- clone(dataset.ivy, deep = T)
+fam.data.cha <- clone(dataset.cha, deep = T)
+```
+
+
+```{r}
+fam.data.pad <- clone(dataset.pad, deep = T)
+```
+
+
+```{r}
+fam.data.gro <- clone(dataset.gro, deep = T)
+fam.data.mar <- clone(dataset.mar, deep = T)
+fam.data.bud <- clone(dataset.bud, deep = T)
+fam.data.joa <- clone(dataset.joa, deep = T)
+fam.data.hen <- clone(dataset.hen, deep = T)
+fam.data.gin <- clone(dataset.gin, deep = T)
+
+fam.data.main$merge_taxa(taxa = "Family")
+fam.data.ham$merge_taxa(taxa = "Family")
+fam.data.her$merge_taxa(taxa = "Family")
+fam.data.jar$merge_taxa(taxa = "Family")
+fam.data.oph$merge_taxa(taxa = "Family")
+fam.data.kub$merge_taxa(taxa = "Family")
+fam.data.kor$merge_taxa(taxa = "Family")
+fam.data.wol$merge_taxa(taxa = "Family")
+fam.data.iri$merge_taxa(taxa = "Family")
+fam.data.goo$merge_taxa(taxa = "Family")
+fam.data.lam$merge_taxa(taxa = "Family")
+fam.data.fra$merge_taxa(taxa = "Family")
+fam.data.ivy$merge_taxa(taxa = "Family")
+fam.data.cha$merge_taxa(taxa = "Family")
+fam.data.gro$merge_taxa(taxa = "Family")
+fam.data.mar$merge_taxa(taxa = "Family")
+fam.data.bud$merge_taxa(taxa = "Family")
+fam.data.joa$merge_taxa(taxa = "Family")
+fam.data.hen$merge_taxa(taxa = "Family")
+fam.data.gin$merge_taxa(taxa = "Family")
+```
+```{r}
+ord.data.main <- clone(dataset.main, deep = T)
+ord.data.ham <- clone(dataset.ham, deep = T)
+ord.data.her <- clone(dataset.her, deep = T)
+ord.data.jar <- clone(dataset.jar, deep = T)
+ord.data.oph <- clone(dataset.oph, deep = T)
+ord.data.kub <- clone(dataset.kub, deep = T)
+ord.data.kor <- clone(dataset.kor, deep = T)
+ord.data.wol <- clone(dataset.wol, deep = T)
+ord.data.iri <- clone(dataset.iri, deep = T)
+ord.data.goo <- clone(dataset.goo, deep = T)
+ord.data.lam <- clone(dataset.lam, deep = T)
+ord.data.fra <- clone(dataset.fra, deep = T)
+ord.data.ivy <- clone(dataset.ivy, deep = T)
+ord.data.cha <- clone(dataset.cha, deep = T)
+ord.data.gro <- clone(dataset.gro, deep = T)
+ord.data.mar <- clone(dataset.mar, deep = T)
+ord.data.bud <- clone(dataset.bud, deep = T)
+ord.data.joa <- clone(dataset.joa, deep = T)
+ord.data.hen <- clone(dataset.hen, deep = T)
+ord.data.gin <- clone(dataset.gin, deep = T)
+
+ord.data.main$merge_taxa(taxa = "Order")
+ord.data.ham$merge_taxa(taxa = "Order")
+ord.data.her$merge_taxa(taxa = "Order")
+ord.data.jar$merge_taxa(taxa = "Order")
+ord.data.oph$merge_taxa(taxa = "Order")
+ord.data.kub$merge_taxa(taxa = "Order")
+ord.data.kor$merge_taxa(taxa = "Order")
+ord.data.wol$merge_taxa(taxa = "Order")
+ord.data.iri$merge_taxa(taxa = "Order")
+ord.data.goo$merge_taxa(taxa = "Order")
+ord.data.lam$merge_taxa(taxa = "Order")
+ord.data.fra$merge_taxa(taxa = "Order")
+ord.data.ivy$merge_taxa(taxa = "Order")
+ord.data.cha$merge_taxa(taxa = "Order")
+ord.data.gro$merge_taxa(taxa = "Order")
+ord.data.mar$merge_taxa(taxa = "Order")
+ord.data.bud$merge_taxa(taxa = "Order")
+ord.data.joa$merge_taxa(taxa = "Order")
+ord.data.hen$merge_taxa(taxa = "Order")
+ord.data.gin$merge_taxa(taxa = "Order")
+```
+```{r}
+cla.data.main <- clone(dataset.main, deep = T)
+cla.data.ham <- clone(dataset.ham, deep = T)
+cla.data.her <- clone(dataset.her, deep = T)
+cla.data.jar <- clone(dataset.jar, deep = T)
+cla.data.oph <- clone(dataset.oph, deep = T)
+cla.data.kub <- clone(dataset.kub, deep = T)
+cla.data.kor <- clone(dataset.kor, deep = T)
+cla.data.wol <- clone(dataset.wol, deep = T)
+cla.data.iri <- clone(dataset.iri, deep = T)
+cla.data.goo <- clone(dataset.goo, deep = T)
+cla.data.lam <- clone(dataset.lam, deep = T)
+cla.data.fra <- clone(dataset.fra, deep = T)
+cla.data.ivy <- clone(dataset.ivy, deep = T)
+cla.data.cha <- clone(dataset.cha, deep = T)
+cla.data.gro <- clone(dataset.gro, deep = T)
+cla.data.mar <- clone(dataset.mar, deep = T)
+cla.data.bud <- clone(dataset.bud, deep = T)
+cla.data.joa <- clone(dataset.joa, deep = T)
+cla.data.hen <- clone(dataset.hen, deep = T)
+cla.data.gin <- clone(dataset.gin, deep = T)
+
+cla.data.main$merge_taxa(taxa = "Class")
+cla.data.ham$merge_taxa(taxa = "Class")
+cla.data.her$merge_taxa(taxa = "Class")
+cla.data.jar$merge_taxa(taxa = "Class")
+cla.data.oph$merge_taxa(taxa = "Class")
+cla.data.kub$merge_taxa(taxa = "Class")
+cla.data.kor$merge_taxa(taxa = "Class")
+cla.data.wol$merge_taxa(taxa = "Class")
+cla.data.iri$merge_taxa(taxa = "Class")
+cla.data.goo$merge_taxa(taxa = "Class")
+cla.data.lam$merge_taxa(taxa = "Class")
+cla.data.fra$merge_taxa(taxa = "Class")
+cla.data.ivy$merge_taxa(taxa = "Class")
+cla.data.cha$merge_taxa(taxa = "Class")
+cla.data.gro$merge_taxa(taxa = "Class")
+cla.data.mar$merge_taxa(taxa = "Class")
+cla.data.bud$merge_taxa(taxa = "Class")
+cla.data.joa$merge_taxa(taxa = "Class")
+cla.data.hen$merge_taxa(taxa = "Class")
+cla.data.gin$merge_taxa(taxa = "Class")
+```
+```{r}
+phy.data.main <- clone(dataset.main, deep = T)
+phy.data.ham <- clone(dataset.ham, deep = T)
+phy.data.her <- clone(dataset.her, deep = T)
+phy.data.jar <- clone(dataset.jar, deep = T)
+phy.data.oph <- clone(dataset.oph, deep = T)
+phy.data.kub <- clone(dataset.kub, deep = T)
+phy.data.kor <- clone(dataset.kor, deep = T)
+phy.data.wol <- clone(dataset.wol, deep = T)
+phy.data.iri <- clone(dataset.iri, deep = T)
+phy.data.goo <- clone(dataset.goo, deep = T)
+phy.data.lam <- clone(dataset.lam, deep = T)
+phy.data.fra <- clone(dataset.fra, deep = T)
+phy.data.ivy <- clone(dataset.ivy, deep = T)
+phy.data.cha <- clone(dataset.cha, deep = T)
+phy.data.gro <- clone(dataset.gro, deep = T)
+phy.data.mar <- clone(dataset.mar, deep = T)
+phy.data.bud <- clone(dataset.bud, deep = T)
+phy.data.joa <- clone(dataset.joa, deep = T)
+phy.data.hen <- clone(dataset.hen, deep = T)
+phy.data.gin <- clone(dataset.gin, deep = T)
+
+phy.data.main$merge_taxa(taxa = "Phylum")
+phy.data.ham$merge_taxa(taxa = "Phylum")
+phy.data.her$merge_taxa(taxa = "Phylum")
+phy.data.jar$merge_taxa(taxa = "Phylum")
+phy.data.oph$merge_taxa(taxa = "Phylum")
+phy.data.kub$merge_taxa(taxa = "Phylum")
+phy.data.kor$merge_taxa(taxa = "Phylum")
+phy.data.wol$merge_taxa(taxa = "Phylum")
+phy.data.iri$merge_taxa(taxa = "Phylum")
+phy.data.goo$merge_taxa(taxa = "Phylum")
+phy.data.lam$merge_taxa(taxa = "Phylum")
+phy.data.fra$merge_taxa(taxa = "Phylum")
+phy.data.ivy$merge_taxa(taxa = "Phylum")
+phy.data.cha$merge_taxa(taxa = "Phylum")
+phy.data.gro$merge_taxa(taxa = "Phylum")
+phy.data.mar$merge_taxa(taxa = "Phylum")
+phy.data.bud$merge_taxa(taxa = "Phylum")
+phy.data.joa$merge_taxa(taxa = "Phylum")
+phy.data.hen$merge_taxa(taxa = "Phylum")
+phy.data.gin$merge_taxa(taxa = "Phylum")
+```
+# Export Datasets for Further Analysis
+```{r echo=FALSE}
+dataset.main$save_table( paste0(params$local, "dataframes/spe_dataset_main"), sep = "\t")
+dataset.ham$save_table(  paste0(params$local, "dataframes/spe_dataset_ham" ), sep = "\t")
+dataset.her$save_table(  paste0(params$local, "dataframes/spe_dataset_her" ), sep = "\t")
+dataset.jar$save_table(  paste0(params$local, "dataframes/spe_dataset_jar" ), sep = "\t")
+dataset.oph$save_table(  paste0(params$local, "dataframes/spe_dataset_oph" ), sep = "\t")
+dataset.kub$save_table(  paste0(params$local, "dataframes/spe_dataset_kub" ), sep = "\t")
+dataset.kor$save_table(  paste0(params$local, "dataframes/spe_dataset_kor" ), sep = "\t")
+dataset.wol$save_table(  paste0(params$local, "dataframes/spe_dataset_wol" ), sep = "\t")
+dataset.iri$save_table(  paste0(params$local, "dataframes/spe_dataset_iri" ), sep = "\t")
+dataset.goo$save_table(  paste0(params$local, "dataframes/spe_dataset_goo" ), sep = "\t")
+dataset.lam$save_table(  paste0(params$local, "dataframes/spe_dataset_lam" ), sep = "\t")
+dataset.fra$save_table(  paste0(params$local, "dataframes/spe_dataset_fra" ), sep = "\t")
+dataset.ivy$save_table(  paste0(params$local, "dataframes/spe_dataset_ivy" ), sep = "\t")
+dataset.cha$save_table(  paste0(params$local, "dataframes/spe_dataset_cha" ), sep = "\t")
+dataset.gro$save_table(  paste0(params$local, "dataframes/spe_dataset_gro" ), sep = "\t")
+dataset.mar$save_table(  paste0(params$local, "dataframes/spe_dataset_mar" ), sep = "\t")
+dataset.bud$save_table(  paste0(params$local, "dataframes/spe_dataset_bud" ), sep = "\t")
+dataset.joa$save_table(  paste0(params$local, "dataframes/spe_dataset_joa" ), sep = "\t")
+dataset.hen$save_table(  paste0(params$local, "dataframes/spe_dataset_hen" ), sep = "\t")
+dataset.gin$save_table(  paste0(params$local, "dataframes/spe_dataset_gin" ), sep = "\t")
+gen.data.main$save_table(paste0(params$local, "dataframes/gen_dataset_main"), sep = "\t")
+gen.data.ham$save_table( paste0(params$local, "dataframes/gen_dataset_ham" ), sep = "\t")
+gen.data.her$save_table( paste0(params$local, "dataframes/gen_dataset_her" ), sep = "\t")
+gen.data.jar$save_table( paste0(params$local, "dataframes/gen_dataset_jar" ), sep = "\t")
+gen.data.oph$save_table( paste0(params$local, "dataframes/gen_dataset_oph" ), sep = "\t")
+gen.data.kub$save_table( paste0(params$local, "dataframes/gen_dataset_kub" ), sep = "\t")
+gen.data.kor$save_table( paste0(params$local, "dataframes/gen_dataset_kor" ), sep = "\t")
+gen.data.wol$save_table( paste0(params$local, "dataframes/gen_dataset_wol" ), sep = "\t")
+gen.data.iri$save_table( paste0(params$local, "dataframes/gen_dataset_iri" ), sep = "\t")
+gen.data.goo$save_table( paste0(params$local, "dataframes/gen_dataset_goo" ), sep = "\t")
+gen.data.lam$save_table( paste0(params$local, "dataframes/gen_dataset_lam" ), sep = "\t")
+gen.data.fra$save_table( paste0(params$local, "dataframes/gen_dataset_fra" ), sep = "\t")
+gen.data.ivy$save_table( paste0(params$local, "dataframes/gen_dataset_ivy" ), sep = "\t")
+gen.data.cha$save_table( paste0(params$local, "dataframes/gen_dataset_cha" ), sep = "\t")
+gen.data.pad$save_table( paste0(params$local, "dataframes/gen_dataset_pad" ), sep = "\t")
+gen.data.gro$save_table( paste0(params$local, "dataframes/gen_dataset_gro" ), sep = "\t")
+gen.data.mar$save_table( paste0(params$local, "dataframes/gen_dataset_mar" ), sep = "\t")
+gen.data.bud$save_table( paste0(params$local, "dataframes/gen_dataset_bud" ), sep = "\t")
+gen.data.joa$save_table( paste0(params$local, "dataframes/gen_dataset_joa" ), sep = "\t")
+gen.data.hen$save_table( paste0(params$local, "dataframes/gen_dataset_hen" ), sep = "\t")
+gen.data.gin$save_table( paste0(params$local, "dataframes/gen_dataset_gin" ), sep = "\t")
+fam.data.main$save_table(paste0(params$local, "dataframes/fam_dataset_main"), sep = "\t")
+fam.data.ham$save_table( paste0(params$local, "dataframes/fam_dataset_ham" ), sep = "\t")
+fam.data.her$save_table( paste0(params$local, "dataframes/fam_dataset_her" ), sep = "\t")
+fam.data.jar$save_table( paste0(params$local, "dataframes/fam_dataset_jar" ), sep = "\t")
+fam.data.oph$save_table( paste0(params$local, "dataframes/fam_dataset_oph" ), sep = "\t")
+fam.data.kub$save_table( paste0(params$local, "dataframes/fam_dataset_kub" ), sep = "\t")
+fam.data.kor$save_table( paste0(params$local, "dataframes/fam_dataset_kor" ), sep = "\t")
+fam.data.wol$save_table( paste0(params$local, "dataframes/fam_dataset_wol" ), sep = "\t")
+fam.data.iri$save_table( paste0(params$local, "dataframes/fam_dataset_iri" ), sep = "\t")
+fam.data.goo$save_table( paste0(params$local, "dataframes/fam_dataset_goo" ), sep = "\t")
+fam.data.lam$save_table( paste0(params$local, "dataframes/fam_dataset_lam" ), sep = "\t")
+fam.data.fra$save_table( paste0(params$local, "dataframes/fam_dataset_fra" ), sep = "\t")
+fam.data.ivy$save_table( paste0(params$local, "dataframes/fam_dataset_ivy" ), sep = "\t")
+fam.data.cha$save_table( paste0(params$local, "dataframes/fam_dataset_cha" ), sep = "\t")
+fam.data.pad$save_table( paste0(params$local, "dataframes/fam_dataset_pad" ), sep = "\t")
+fam.data.gro$save_table( paste0(params$local, "dataframes/fam_dataset_gro" ), sep = "\t")
+fam.data.mar$save_table( paste0(params$local, "dataframes/fam_dataset_mar" ), sep = "\t")
+fam.data.bud$save_table( paste0(params$local, "dataframes/fam_dataset_bud" ), sep = "\t")
+fam.data.joa$save_table( paste0(params$local, "dataframes/fam_dataset_joa" ), sep = "\t")
+fam.data.hen$save_table( paste0(params$local, "dataframes/fam_dataset_hen" ), sep = "\t")
+fam.data.gin$save_table( paste0(params$local, "dataframes/fam_dataset_gin" ), sep = "\t")
+ord.data.main$save_table(paste0(params$local, "dataframes/ord_dataset_main"), sep = "\t")
+ord.data.ham$save_table( paste0(params$local, "dataframes/ord_dataset_ham" ), sep = "\t")
+ord.data.her$save_table( paste0(params$local, "dataframes/ord_dataset_her" ), sep = "\t")
+ord.data.jar$save_table( paste0(params$local, "dataframes/ord_dataset_jar" ), sep = "\t")
+ord.data.oph$save_table( paste0(params$local, "dataframes/ord_dataset_oph" ), sep = "\t")
+ord.data.kub$save_table( paste0(params$local, "dataframes/ord_dataset_kub" ), sep = "\t")
+ord.data.kor$save_table( paste0(params$local, "dataframes/ord_dataset_kor" ), sep = "\t")
+ord.data.wol$save_table( paste0(params$local, "dataframes/ord_dataset_wol" ), sep = "\t")
+ord.data.iri$save_table( paste0(params$local, "dataframes/ord_dataset_iri" ), sep = "\t")
+ord.data.goo$save_table( paste0(params$local, "dataframes/ord_dataset_goo" ), sep = "\t")
+ord.data.lam$save_table( paste0(params$local, "dataframes/ord_dataset_lam" ), sep = "\t")
+ord.data.fra$save_table( paste0(params$local, "dataframes/ord_dataset_fra" ), sep = "\t")
+ord.data.ivy$save_table( paste0(params$local, "dataframes/ord_dataset_ivy" ), sep = "\t")
+ord.data.cha$save_table( paste0(params$local, "dataframes/ord_dataset_cha" ), sep = "\t")
+ord.data.pad$save_table( paste0(params$local, "dataframes/ord_dataset_pad" ), sep = "\t")
+ord.data.gro$save_table( paste0(params$local, "dataframes/ord_dataset_gro" ), sep = "\t")
+ord.data.mar$save_table( paste0(params$local, "dataframes/ord_dataset_mar" ), sep = "\t")
+ord.data.bud$save_table( paste0(params$local, "dataframes/ord_dataset_bud" ), sep = "\t")
+ord.data.joa$save_table( paste0(params$local, "dataframes/ord_dataset_joa" ), sep = "\t")
+ord.data.hen$save_table( paste0(params$local, "dataframes/ord_dataset_hen" ), sep = "\t")
+ord.data.gin$save_table( paste0(params$local, "dataframes/ord_dataset_gin" ), sep = "\t")
+cla.data.main$save_table(paste0(params$local, "dataframes/cla_dataset_main"), sep = "\t")
+cla.data.ham$save_table( paste0(params$local, "dataframes/cla_dataset_ham" ), sep = "\t")
+cla.data.her$save_table( paste0(params$local, "dataframes/cla_dataset_her" ), sep = "\t")
+cla.data.jar$save_table( paste0(params$local, "dataframes/cla_dataset_jar" ), sep = "\t")
+cla.data.oph$save_table( paste0(params$local, "dataframes/cla_dataset_oph" ), sep = "\t")
+cla.data.kub$save_table( paste0(params$local, "dataframes/cla_dataset_kub" ), sep = "\t")
+cla.data.kor$save_table( paste0(params$local, "dataframes/cla_dataset_kor" ), sep = "\t")
+cla.data.wol$save_table( paste0(params$local, "dataframes/cla_dataset_wol" ), sep = "\t")
+cla.data.iri$save_table( paste0(params$local, "dataframes/cla_dataset_iri" ), sep = "\t")
+cla.data.goo$save_table( paste0(params$local, "dataframes/cla_dataset_goo" ), sep = "\t")
+cla.data.lam$save_table( paste0(params$local, "dataframes/cla_dataset_lam" ), sep = "\t")
+cla.data.fra$save_table( paste0(params$local, "dataframes/cla_dataset_fra" ), sep = "\t")
+cla.data.ivy$save_table( paste0(params$local, "dataframes/cla_dataset_ivy" ), sep = "\t")
+cla.data.cha$save_table( paste0(params$local, "dataframes/cla_dataset_cha" ), sep = "\t")
+cla.data.pad$save_table( paste0(params$local, "dataframes/cla_dataset_pad" ), sep = "\t")
+cla.data.gro$save_table( paste0(params$local, "dataframes/cla_dataset_gro" ), sep = "\t")
+cla.data.mar$save_table( paste0(params$local, "dataframes/cla_dataset_mar" ), sep = "\t")
+cla.data.bud$save_table( paste0(params$local, "dataframes/cla_dataset_bud" ), sep = "\t")
+cla.data.joa$save_table( paste0(params$local, "dataframes/cla_dataset_joa" ), sep = "\t")
+cla.data.hen$save_table( paste0(params$local, "dataframes/cla_dataset_hen" ), sep = "\t")
+cla.data.gin$save_table( paste0(params$local, "dataframes/cla_dataset_gin" ), sep = "\t")
+phy.data.main$save_table(paste0(params$local, "dataframes/phy_dataset_main"), sep = "\t")
+phy.data.ham$save_table( paste0(params$local, "dataframes/phy_dataset_ham" ), sep = "\t")
+phy.data.her$save_table( paste0(params$local, "dataframes/phy_dataset_her" ), sep = "\t")
+phy.data.jar$save_table( paste0(params$local, "dataframes/phy_dataset_jar" ), sep = "\t")
+phy.data.oph$save_table( paste0(params$local, "dataframes/phy_dataset_oph" ), sep = "\t")
+phy.data.kub$save_table( paste0(params$local, "dataframes/phy_dataset_kub" ), sep = "\t")
+phy.data.kor$save_table( paste0(params$local, "dataframes/phy_dataset_kor" ), sep = "\t")
+phy.data.wol$save_table( paste0(params$local, "dataframes/phy_dataset_wol" ), sep = "\t")
+phy.data.iri$save_table( paste0(params$local, "dataframes/phy_dataset_iri" ), sep = "\t")
+phy.data.goo$save_table( paste0(params$local, "dataframes/phy_dataset_goo" ), sep = "\t")
+phy.data.lam$save_table( paste0(params$local, "dataframes/phy_dataset_lam" ), sep = "\t")
+phy.data.fra$save_table( paste0(params$local, "dataframes/phy_dataset_fra" ), sep = "\t")
+phy.data.ivy$save_table( paste0(params$local, "dataframes/phy_dataset_ivy" ), sep = "\t")
+phy.data.cha$save_table( paste0(params$local, "dataframes/phy_dataset_cha" ), sep = "\t")
+phy.data.pad$save_table( paste0(params$local, "dataframes/phy_dataset_pad" ), sep = "\t")
+phy.data.gro$save_table( paste0(params$local, "dataframes/phy_dataset_gro" ), sep = "\t")
+phy.data.mar$save_table( paste0(params$local, "dataframes/phy_dataset_mar" ), sep = "\t")
+phy.data.bud$save_table( paste0(params$local, "dataframes/phy_dataset_bud" ), sep = "\t")
+phy.data.joa$save_table( paste0(params$local, "dataframes/phy_dataset_joa" ), sep = "\t")
+phy.data.hen$save_table( paste0(params$local, "dataframes/phy_dataset_hen" ), sep = "\t")
+phy.data.gin$save_table( paste0(params$local, "dataframes/phy_dataset_gin" ), sep = "\t")
+```
+## Export Tables with Basic Stats
+```{r}
+dataset.main$save_abund("spe_abund_main", sep = "\t")
+dataset.ham$save_abund("spe_abund_ham", sep = "\t")
+dataset.her$save_abund("spe_abund_her", sep = "\t")
+dataset.jar$save_abund("spe_abund_jar", sep = "\t")
+dataset.oph$save_abund("spe_abund_oph", sep = "\t")
+dataset.kub$save_abund("spe_abund_kub", sep = "\t")
+dataset.kor$save_abund("spe_abund_kor", sep = "\t")
+dataset.wol$save_abund("spe_abund_wol", sep = "\t")
+dataset.iri$save_abund("spe_abund_iri", sep = "\t")
+dataset.goo$save_abund("spe_abund_goo", sep = "\t")
+dataset.lam$save_abund("spe_abund_lam", sep = "\t")
+dataset.fra$save_abund("spe_abund_fra", sep = "\t")
+dataset.ivy$save_abund("spe_abund_ivy", sep = "\t")
+dataset.cha$save_abund("spe_abund_cha", sep = "\t")
+dataset.pad$save_abund("spe_abund_pad", sep = "\t")
+dataset.gro$save_abund("spe_abund_gro", sep = "\t")
+dataset.mar$save_abund("spe_abund_mar", sep = "\t")
+dataset.bud$save_abund("spe_abund_bud", sep = "\t")
+dataset.joa$save_abund("spe_abund_joa", sep = "\t")
+dataset.hen$save_abund("spe_abund_hen", sep = "\t")
+dataset.gin$save_abund("spe_abund_gin", sep = "\t")
+
+gen.data.main$save_abund("gen_abund_main", sep = "\t")
+gen.data.ham$save_abund("gen_abund_ham", sep = "\t")
+gen.data.her$save_abund("gen_abund_her", sep = "\t")
+gen.data.jar$save_abund("gen_abund_jar", sep = "\t")
+gen.data.oph$save_abund("gen_abund_oph", sep = "\t")
+gen.data.kub$save_abund("gen_abund_kub", sep = "\t")
+gen.data.kor$save_abund("gen_abund_kor", sep = "\t")
+gen.data.wol$save_abund("gen_abund_wol", sep = "\t")
+gen.data.iri$save_abund("gen_abund_iri", sep = "\t")
+gen.data.goo$save_abund("gen_abund_goo", sep = "\t")
+gen.data.lam$save_abund("gen_abund_lam", sep = "\t")
+gen.data.fra$save_abund("gen_abund_fra", sep = "\t")
+gen.data.ivy$save_abund("gen_abund_ivy", sep = "\t")
+gen.data.cha$save_abund("gen_abund_cha", sep = "\t")
+gen.data.pad$save_abund("gen_abund_pad", sep = "\t")
+gen.data.gro$save_abund("gen_abund_gro", sep = "\t")
+gen.data.mar$save_abund("gen_abund_mar", sep = "\t")
+gen.data.bud$save_abund("gen_abund_bud", sep = "\t")
+gen.data.joa$save_abund("gen_abund_joa", sep = "\t")
+gen.data.hen$save_abund("gen_abund_hen", sep = "\t")
+gen.data.gin$save_abund("gen_abund_gin", sep = "\t")
+
+fam.data.main$save_abund("fam_abund_main", sep = "\t")
+fam.data.ham$save_abund("fam_abund_ham", sep = "\t")
+fam.data.her$save_abund("fam_abund_her", sep = "\t")
+fam.data.jar$save_abund("fam_abund_jar", sep = "\t")
+fam.data.oph$save_abund("fam_abund_oph", sep = "\t")
+fam.data.kub$save_abund("fam_abund_kub", sep = "\t")
+fam.data.kor$save_abund("fam_abund_kor", sep = "\t")
+fam.data.wol$save_abund("fam_abund_wol", sep = "\t")
+fam.data.iri$save_abund("fam_abund_iri", sep = "\t")
+fam.data.goo$save_abund("fam_abund_goo", sep = "\t")
+fam.data.lam$save_abund("fam_abund_lam", sep = "\t")
+fam.data.fra$save_abund("fam_abund_fra", sep = "\t")
+fam.data.ivy$save_abund("fam_abund_ivy", sep = "\t")
+fam.data.cha$save_abund("fam_abund_cha", sep = "\t")
+fam.data.pad$save_abund("fam_abund_pad", sep = "\t")
+fam.data.gro$save_abund("fam_abund_gro", sep = "\t")
+fam.data.mar$save_abund("fam_abund_mar", sep = "\t")
+fam.data.bud$save_abund("fam_abund_bud", sep = "\t")
+fam.data.joa$save_abund("fam_abund_joa", sep = "\t")
+fam.data.hen$save_abund("fam_abund_hen", sep = "\t")
+fam.data.gin$save_abund("fam_abund_gin", sep = "\t")
+
+ord.data.main$save_abund("ord_abund_main", sep = "\t")
+ord.data.ham$save_abund("ord_abund_ham", sep = "\t")
+ord.data.her$save_abund("ord_abund_her", sep = "\t")
+ord.data.jar$save_abund("ord_abund_jar", sep = "\t")
+ord.data.oph$save_abund("ord_abund_oph", sep = "\t")
+ord.data.kub$save_abund("ord_abund_kub", sep = "\t")
+ord.data.kor$save_abund("ord_abund_kor", sep = "\t")
+ord.data.wol$save_abund("ord_abund_wol", sep = "\t")
+ord.data.iri$save_abund("ord_abund_iri", sep = "\t")
+ord.data.goo$save_abund("ord_abund_goo", sep = "\t")
+ord.data.lam$save_abund("ord_abund_lam", sep = "\t")
+ord.data.fra$save_abund("ord_abund_fra", sep = "\t")
+ord.data.ivy$save_abund("ord_abund_ivy", sep = "\t")
+ord.data.cha$save_abund("ord_abund_cha", sep = "\t")
+ord.data.pad$save_abund("ord_abund_pad", sep = "\t")
+ord.data.gro$save_abund("ord_abund_gro", sep = "\t")
+ord.data.mar$save_abund("ord_abund_mar", sep = "\t")
+ord.data.bud$save_abund("ord_abund_bud", sep = "\t")
+ord.data.joa$save_abund("ord_abund_joa", sep = "\t")
+ord.data.hen$save_abund("ord_abund_hen", sep = "\t")
+ord.data.gin$save_abund("ord_abund_gin", sep = "\t")
+
+cla.data.main$save_abund("cla_abund_main", sep = "\t")
+cla.data.ham$save_abund("cla_abund_ham", sep = "\t")
+cla.data.her$save_abund("cla_abund_her", sep = "\t")
+cla.data.jar$save_abund("cla_abund_jar", sep = "\t")
+cla.data.oph$save_abund("cla_abund_oph", sep = "\t")
+cla.data.kub$save_abund("cla_abund_kub", sep = "\t")
+cla.data.kor$save_abund("cla_abund_kor", sep = "\t")
+cla.data.wol$save_abund("cla_abund_wol", sep = "\t")
+cla.data.iri$save_abund("cla_abund_iri", sep = "\t")
+cla.data.goo$save_abund("cla_abund_goo", sep = "\t")
+cla.data.lam$save_abund("cla_abund_lam", sep = "\t")
+cla.data.fra$save_abund("cla_abund_fra", sep = "\t")
+cla.data.ivy$save_abund("cla_abund_ivy", sep = "\t")
+cla.data.cha$save_abund("cla_abund_cha", sep = "\t")
+cla.data.pad$save_abund("cla_abund_pad", sep = "\t")
+cla.data.gro$save_abund("cla_abund_gro", sep = "\t")
+cla.data.mar$save_abund("cla_abund_mar", sep = "\t")
+cla.data.bud$save_abund("cla_abund_bud", sep = "\t")
+cla.data.joa$save_abund("cla_abund_joa", sep = "\t")
+cla.data.hen$save_abund("cla_abund_hen", sep = "\t")
+cla.data.gin$save_abund("cla_abund_gin", sep = "\t")
+
+phy.data.main$save_abund("phy_abund_main", sep = "\t")
+phy.data.ham$save_abund("phy_abund_ham", sep = "\t")
+phy.data.her$save_abund("phy_abund_her", sep = "\t")
+phy.data.jar$save_abund("phy_abund_jar", sep = "\t")
+phy.data.oph$save_abund("phy_abund_oph", sep = "\t")
+phy.data.kub$save_abund("phy_abund_kub", sep = "\t")
+phy.data.kor$save_abund("phy_abund_kor", sep = "\t")
+phy.data.wol$save_abund("phy_abund_wol", sep = "\t")
+phy.data.iri$save_abund("phy_abund_iri", sep = "\t")
+phy.data.goo$save_abund("phy_abund_goo", sep = "\t")
+phy.data.lam$save_abund("phy_abund_lam", sep = "\t")
+phy.data.fra$save_abund("phy_abund_fra", sep = "\t")
+phy.data.ivy$save_abund("phy_abund_ivy", sep = "\t")
+phy.data.cha$save_abund("phy_abund_cha", sep = "\t")
+phy.data.pad$save_abund("phy_abund_pad", sep = "\t")
+phy.data.gro$save_abund("phy_abund_gro", sep = "\t")
+phy.data.mar$save_abund("phy_abund_mar", sep = "\t")
+phy.data.bud$save_abund("phy_abund_bud", sep = "\t")
+phy.data.joa$save_abund("phy_abund_joa", sep = "\t")
+phy.data.hen$save_abund("phy_abund_hen", sep = "\t")
+phy.data.gin$save_abund("phy_abund_gin", sep = "\t")
+
+dataset.main$save_alphadiv("spe_alphadiv_main")
+dataset.ham$save_alphadiv("spe_alphadiv_ham")
+dataset.her$save_alphadiv("spe_alphadiv_her")
+dataset.jar$save_alphadiv("spe_alphadiv_jar")
+dataset.oph$save_alphadiv("spe_alphadiv_oph")
+dataset.kub$save_alphadiv("spe_alphadiv_kub")
+dataset.kor$save_alphadiv("spe_alphadiv_kor")
+dataset.wol$save_alphadiv("spe_alphadiv_wol")
+dataset.iri$save_alphadiv("spe_alphadiv_iri")
+dataset.goo$save_alphadiv("spe_alphadiv_goo")
+dataset.lam$save_alphadiv("spe_alphadiv_lam")
+dataset.fra$save_alphadiv("spe_alphadiv_fra")
+dataset.ivy$save_alphadiv("spe_alphadiv_ivy")
+dataset.cha$save_alphadiv("spe_alphadiv_cha")
+dataset.pad$save_alphadiv("spe_alphadiv_pad")
+dataset.gro$save_alphadiv("spe_alphadiv_gro")
+dataset.mar$save_alphadiv("spe_alphadiv_mar")
+dataset.bud$save_alphadiv("spe_alphadiv_bud")
+dataset.joa$save_alphadiv("spe_alphadiv_joa")
+dataset.hen$save_alphadiv("spe_alphadiv_hen")
+dataset.gin$save_alphadiv("spe_alphadiv_gin")
+
+gen.data.main$save_alphadiv("gen_alphadiv_main")
+gen.data.ham$save_alphadiv("gen_alphadiv_ham")
+gen.data.her$save_alphadiv("gen_alphadiv_her")
+gen.data.jar$save_alphadiv("gen_alphadiv_jar")
+gen.data.oph$save_alphadiv("gen_alphadiv_oph")
+gen.data.kub$save_alphadiv("gen_alphadiv_kub")
+gen.data.kor$save_alphadiv("gen_alphadiv_kor")
+gen.data.wol$save_alphadiv("gen_alphadiv_wol")
+gen.data.iri$save_alphadiv("gen_alphadiv_iri")
+gen.data.goo$save_alphadiv("gen_alphadiv_goo")
+gen.data.lam$save_alphadiv("gen_alphadiv_lam")
+gen.data.fra$save_alphadiv("gen_alphadiv_fra")
+gen.data.ivy$save_alphadiv("gen_alphadiv_ivy")
+gen.data.cha$save_alphadiv("gen_alphadiv_cha")
+gen.data.pad$save_alphadiv("gen_alphadiv_pad")
+gen.data.gro$save_alphadiv("gen_alphadiv_gro")
+gen.data.mar$save_alphadiv("gen_alphadiv_mar")
+gen.data.bud$save_alphadiv("gen_alphadiv_bud")
+gen.data.joa$save_alphadiv("gen_alphadiv_joa")
+gen.data.hen$save_alphadiv("gen_alphadiv_hen")
+gen.data.gin$save_alphadiv("gen_alphadiv_gin")
+
+fam.data.main$save_alphadiv("fam_alphadiv_main")
+fam.data.ham$save_alphadiv("fam_alphadiv_ham")
+fam.data.her$save_alphadiv("fam_alphadiv_her")
+fam.data.jar$save_alphadiv("fam_alphadiv_jar")
+fam.data.oph$save_alphadiv("fam_alphadiv_oph")
+fam.data.kub$save_alphadiv("fam_alphadiv_kub")
+fam.data.kor$save_alphadiv("fam_alphadiv_kor")
+fam.data.wol$save_alphadiv("fam_alphadiv_wol")
+fam.data.iri$save_alphadiv("fam_alphadiv_iri")
+fam.data.goo$save_alphadiv("fam_alphadiv_goo")
+fam.data.lam$save_alphadiv("fam_alphadiv_lam")
+fam.data.fra$save_alphadiv("fam_alphadiv_fra")
+fam.data.ivy$save_alphadiv("fam_alphadiv_ivy")
+fam.data.cha$save_alphadiv("fam_alphadiv_cha")
+fam.data.pad$save_alphadiv("fam_alphadiv_pad")
+fam.data.gro$save_alphadiv("fam_alphadiv_gro")
+fam.data.mar$save_alphadiv("fam_alphadiv_mar")
+fam.data.bud$save_alphadiv("fam_alphadiv_bud")
+fam.data.joa$save_alphadiv("fam_alphadiv_joa")
+fam.data.hen$save_alphadiv("fam_alphadiv_hen")
+fam.data.gin$save_alphadiv("fam_alphadiv_gin")
+
+ord.data.main$save_alphadiv("ord_alphadiv_main")
+ord.data.ham$save_alphadiv("ord_alphadiv_ham")
+ord.data.her$save_alphadiv("ord_alphadiv_her")
+ord.data.jar$save_alphadiv("ord_alphadiv_jar")
+ord.data.oph$save_alphadiv("ord_alphadiv_oph")
+ord.data.kub$save_alphadiv("ord_alphadiv_kub")
+ord.data.kor$save_alphadiv("ord_alphadiv_kor")
+ord.data.wol$save_alphadiv("ord_alphadiv_wol")
+ord.data.iri$save_alphadiv("ord_alphadiv_iri")
+ord.data.goo$save_alphadiv("ord_alphadiv_goo")
+ord.data.lam$save_alphadiv("ord_alphadiv_lam")
+ord.data.fra$save_alphadiv("ord_alphadiv_fra")
+ord.data.ivy$save_alphadiv("ord_alphadiv_ivy")
+ord.data.cha$save_alphadiv("ord_alphadiv_cha")
+ord.data.pad$save_alphadiv("ord_alphadiv_pad")
+ord.data.gro$save_alphadiv("ord_alphadiv_gro")
+ord.data.mar$save_alphadiv("ord_alphadiv_mar")
+ord.data.bud$save_alphadiv("ord_alphadiv_bud")
+ord.data.joa$save_alphadiv("ord_alphadiv_joa")
+ord.data.hen$save_alphadiv("ord_alphadiv_hen")
+ord.data.gin$save_alphadiv("ord_alphadiv_gin")
+
+cla.data.main$save_alphadiv("cla_alphadiv_main")
+cla.data.ham$save_alphadiv("cla_alphadiv_ham")
+cla.data.her$save_alphadiv("cla_alphadiv_her")
+cla.data.jar$save_alphadiv("cla_alphadiv_jar")
+cla.data.oph$save_alphadiv("cla_alphadiv_oph")
+cla.data.kub$save_alphadiv("cla_alphadiv_kub")
+cla.data.kor$save_alphadiv("cla_alphadiv_kor")
+cla.data.wol$save_alphadiv("cla_alphadiv_wol")
+cla.data.iri$save_alphadiv("cla_alphadiv_iri")
+cla.data.goo$save_alphadiv("cla_alphadiv_goo")
+cla.data.lam$save_alphadiv("cla_alphadiv_lam")
+cla.data.fra$save_alphadiv("cla_alphadiv_fra")
+cla.data.ivy$save_alphadiv("cla_alphadiv_ivy")
+cla.data.cha$save_alphadiv("cla_alphadiv_cha")
+cla.data.pad$save_alphadiv("cla_alphadiv_pad")
+cla.data.gro$save_alphadiv("cla_alphadiv_gro")
+cla.data.mar$save_alphadiv("cla_alphadiv_mar")
+cla.data.bud$save_alphadiv("cla_alphadiv_bud")
+cla.data.joa$save_alphadiv("cla_alphadiv_joa")
+cla.data.hen$save_alphadiv("cla_alphadiv_hen")
+cla.data.gin$save_alphadiv("cla_alphadiv_gin")
+
+phy.data.main$save_alphadiv("phy_alphadiv_main")
+phy.data.ham$save_alphadiv("phy_alphadiv_ham")
+phy.data.her$save_alphadiv("phy_alphadiv_her")
+phy.data.jar$save_alphadiv("phy_alphadiv_jar")
+phy.data.oph$save_alphadiv("phy_alphadiv_oph")
+phy.data.kub$save_alphadiv("phy_alphadiv_kub")
+phy.data.kor$save_alphadiv("phy_alphadiv_kor")
+phy.data.wol$save_alphadiv("phy_alphadiv_wol")
+phy.data.iri$save_alphadiv("phy_alphadiv_iri")
+phy.data.goo$save_alphadiv("phy_alphadiv_goo")
+phy.data.lam$save_alphadiv("phy_alphadiv_lam")
+phy.data.fra$save_alphadiv("phy_alphadiv_fra")
+phy.data.ivy$save_alphadiv("phy_alphadiv_ivy")
+phy.data.cha$save_alphadiv("phy_alphadiv_cha")
+phy.data.pad$save_alphadiv("phy_alphadiv_pad")
+phy.data.gro$save_alphadiv("phy_alphadiv_gro")
+phy.data.mar$save_alphadiv("phy_alphadiv_mar")
+phy.data.bud$save_alphadiv("phy_alphadiv_bud")
+phy.data.joa$save_alphadiv("phy_alphadiv_joa")
+phy.data.hen$save_alphadiv("phy_alphadiv_hen")
+phy.data.gin$save_alphadiv("phy_alphadiv_gin")
+
+dataset.main$save_betadiv("spe_betadiv_main")
+dataset.ham$save_betadiv("spe_betadiv_ham")
+dataset.her$save_betadiv("spe_betadiv_her")
+dataset.jar$save_betadiv("spe_betadiv_jar")
+dataset.oph$save_betadiv("spe_betadiv_oph")
+dataset.kub$save_betadiv("spe_betadiv_kub")
+dataset.kor$save_betadiv("spe_betadiv_kor")
+dataset.wol$save_betadiv("spe_betadiv_wol")
+dataset.iri$save_betadiv("spe_betadiv_iri")
+dataset.goo$save_betadiv("spe_betadiv_goo")
+dataset.lam$save_betadiv("spe_betadiv_lam")
+dataset.fra$save_betadiv("spe_betadiv_fra")
+dataset.ivy$save_betadiv("spe_betadiv_ivy")
+dataset.cha$save_betadiv("spe_betadiv_cha")
+dataset.pad$save_betadiv("spe_betadiv_pad")
+dataset.gro$save_betadiv("spe_betadiv_gro")
+dataset.mar$save_betadiv("spe_betadiv_mar")
+dataset.bud$save_betadiv("spe_betadiv_bud")
+dataset.joa$save_betadiv("spe_betadiv_joa")
+dataset.hen$save_betadiv("spe_betadiv_hen")
+dataset.gin$save_betadiv("spe_betadiv_gin")
+
+gen.data.main$save_betadiv("gen_betadiv_main")
+gen.data.ham$save_betadiv("gen_betadiv_ham")
+gen.data.her$save_betadiv("gen_betadiv_her")
+gen.data.jar$save_betadiv("gen_betadiv_jar")
+gen.data.oph$save_betadiv("gen_betadiv_oph")
+gen.data.kub$save_betadiv("gen_betadiv_kub")
+gen.data.kor$save_betadiv("gen_betadiv_kor")
+gen.data.wol$save_betadiv("gen_betadiv_wol")
+gen.data.iri$save_betadiv("gen_betadiv_iri")
+gen.data.goo$save_betadiv("gen_betadiv_goo")
+gen.data.lam$save_betadiv("gen_betadiv_lam")
+gen.data.fra$save_betadiv("gen_betadiv_fra")
+gen.data.ivy$save_betadiv("gen_betadiv_ivy")
+gen.data.cha$save_betadiv("gen_betadiv_cha")
+gen.data.pad$save_betadiv("gen_betadiv_pad")
+gen.data.gro$save_betadiv("gen_betadiv_gro")
+gen.data.mar$save_betadiv("gen_betadiv_mar")
+gen.data.bud$save_betadiv("gen_betadiv_bud")
+gen.data.joa$save_betadiv("gen_betadiv_joa")
+gen.data.hen$save_betadiv("gen_betadiv_hen")
+gen.data.gin$save_betadiv("gen_betadiv_gin")
+
+fam.data.main$save_betadiv("fam_betadiv_main")
+fam.data.ham$save_betadiv("fam_betadiv_ham")
+fam.data.her$save_betadiv("fam_betadiv_her")
+fam.data.jar$save_betadiv("fam_betadiv_jar")
+fam.data.oph$save_betadiv("fam_betadiv_oph")
+fam.data.kub$save_betadiv("fam_betadiv_kub")
+fam.data.kor$save_betadiv("fam_betadiv_kor")
+fam.data.wol$save_betadiv("fam_betadiv_wol")
+fam.data.iri$save_betadiv("fam_betadiv_iri")
+fam.data.goo$save_betadiv("fam_betadiv_goo")
+fam.data.lam$save_betadiv("fam_betadiv_lam")
+fam.data.fra$save_betadiv("fam_betadiv_fra")
+fam.data.ivy$save_betadiv("fam_betadiv_ivy")
+fam.data.cha$save_betadiv("fam_betadiv_cha")
+fam.data.pad$save_betadiv("fam_betadiv_pad")
+fam.data.gro$save_betadiv("fam_betadiv_gro")
+fam.data.mar$save_betadiv("fam_betadiv_mar")
+fam.data.bud$save_betadiv("fam_betadiv_bud")
+fam.data.joa$save_betadiv("fam_betadiv_joa")
+fam.data.hen$save_betadiv("fam_betadiv_hen")
+fam.data.gin$save_betadiv("fam_betadiv_gin")
+
+ord.data.main$save_betadiv("ord_betadiv_main")
+ord.data.ham$save_betadiv("ord_betadiv_ham")
+ord.data.her$save_betadiv("ord_betadiv_her")
+ord.data.jar$save_betadiv("ord_betadiv_jar")
+ord.data.oph$save_betadiv("ord_betadiv_oph")
+ord.data.kub$save_betadiv("ord_betadiv_kub")
+ord.data.kor$save_betadiv("ord_betadiv_kor")
+ord.data.wol$save_betadiv("ord_betadiv_wol")
+ord.data.iri$save_betadiv("ord_betadiv_iri")
+ord.data.goo$save_betadiv("ord_betadiv_goo")
+ord.data.lam$save_betadiv("ord_betadiv_lam")
+ord.data.fra$save_betadiv("ord_betadiv_fra")
+ord.data.ivy$save_betadiv("ord_betadiv_ivy")
+ord.data.cha$save_betadiv("ord_betadiv_cha")
+ord.data.pad$save_betadiv("ord_betadiv_pad")
+ord.data.gro$save_betadiv("ord_betadiv_gro")
+ord.data.mar$save_betadiv("ord_betadiv_mar")
+ord.data.bud$save_betadiv("ord_betadiv_bud")
+ord.data.joa$save_betadiv("ord_betadiv_joa")
+ord.data.hen$save_betadiv("ord_betadiv_hen")
+ord.data.gin$save_betadiv("ord_betadiv_gin")
+
+cla.data.main$save_betadiv("cla_betadiv_main")
+cla.data.ham$save_betadiv("cla_betadiv_ham")
+cla.data.her$save_betadiv("cla_betadiv_her")
+cla.data.jar$save_betadiv("cla_betadiv_jar")
+cla.data.oph$save_betadiv("cla_betadiv_oph")
+cla.data.kub$save_betadiv("cla_betadiv_kub")
+cla.data.kor$save_betadiv("cla_betadiv_kor")
+cla.data.wol$save_betadiv("cla_betadiv_wol")
+cla.data.iri$save_betadiv("cla_betadiv_iri")
+cla.data.goo$save_betadiv("cla_betadiv_goo")
+cla.data.lam$save_betadiv("cla_betadiv_lam")
+cla.data.fra$save_betadiv("cla_betadiv_fra")
+cla.data.ivy$save_betadiv("cla_betadiv_ivy")
+cla.data.cha$save_betadiv("cla_betadiv_cha")
+cla.data.pad$save_betadiv("cla_betadiv_pad")
+cla.data.gro$save_betadiv("cla_betadiv_gro")
+cla.data.mar$save_betadiv("cla_betadiv_mar")
+cla.data.bud$save_betadiv("cla_betadiv_bud")
+cla.data.joa$save_betadiv("cla_betadiv_joa")
+cla.data.hen$save_betadiv("cla_betadiv_hen")
+cla.data.gin$save_betadiv("cla_betadiv_gin")
+
+phy.data.main$save_betadiv("phy_betadiv_main")
+phy.data.ham$save_betadiv("phy_betadiv_ham")
+phy.data.her$save_betadiv("phy_betadiv_her")
+phy.data.jar$save_betadiv("phy_betadiv_jar")
+phy.data.oph$save_betadiv("phy_betadiv_oph")
+phy.data.kub$save_betadiv("phy_betadiv_kub")
+phy.data.kor$save_betadiv("phy_betadiv_kor")
+phy.data.wol$save_betadiv("phy_betadiv_wol")
+phy.data.iri$save_betadiv("phy_betadiv_iri")
+phy.data.goo$save_betadiv("phy_betadiv_goo")
+phy.data.lam$save_betadiv("phy_betadiv_lam")
+phy.data.fra$save_betadiv("phy_betadiv_fra")
+phy.data.ivy$save_betadiv("phy_betadiv_ivy")
+phy.data.cha$save_betadiv("phy_betadiv_cha")
+phy.data.pad$save_betadiv("phy_betadiv_pad")
+phy.data.gro$save_betadiv("phy_betadiv_gro")
+phy.data.mar$save_betadiv("phy_betadiv_mar")
+phy.data.bud$save_betadiv("phy_betadiv_bud")
+phy.data.joa$save_betadiv("phy_betadiv_joa")
+phy.data.hen$save_betadiv("phy_betadiv_hen")
+phy.data.gin$save_betadiv("phy_betadiv_gin")
+```
+## Add Functional Profiles 
+### FAPROTAX
+```{r}
+fpt.main <- trans_func$new(dataset.main)
+fpt.ham <- trans_func$new(dataset.ham)
+fpt.her <- trans_func$new(dataset.her)
+fpt.jar <- trans_func$new(dataset.jar)
+fpt.oph <- trans_func$new(dataset.oph)
+fpt.kub <- trans_func$new(dataset.kub)
+fpt.kor <- trans_func$new(dataset.kor)
+fpt.wol <- trans_func$new(dataset.wol)
+fpt.iri <- trans_func$new(dataset.iri)
+fpt.goo <- trans_func$new(dataset.goo)
+fpt.lam <- trans_func$new(dataset.lam)
+fpt.fra <- trans_func$new(dataset.fra)
+fpt.ivy <- trans_func$new(dataset.ivy)
+fpt.cha <- trans_func$new(dataset.cha)
+fpt.pad <- trans_func$new(dataset.pad)
+fpt.gro <- trans_func$new(dataset.gro)
+fpt.mar <- trans_func$new(dataset.mar)
+fpt.bud <- trans_func$new(dataset.bud)
+fpt.joa <- trans_func$new(dataset.joa)
+fpt.hen <- trans_func$new(dataset.hen)
+fpt.gin <- trans_func$new(dataset.gin)
+```
+```{r}
+fpt.main$cal_spe_func(prok_database = "FAPROTAX")
+fpt.ham$cal_spe_func(prok_database = "FAPROTAX")
+fpt.her$cal_spe_func(prok_database = "FAPROTAX")
+fpt.jar$cal_spe_func(prok_database = "FAPROTAX")
+fpt.oph$cal_spe_func(prok_database = "FAPROTAX")
+fpt.kub$cal_spe_func(prok_database = "FAPROTAX")
+fpt.kor$cal_spe_func(prok_database = "FAPROTAX")
+fpt.wol$cal_spe_func(prok_database = "FAPROTAX")
+fpt.iri$cal_spe_func(prok_database = "FAPROTAX")
+fpt.goo$cal_spe_func(prok_database = "FAPROTAX")
+fpt.lam$cal_spe_func(prok_database = "FAPROTAX")
+fpt.fra$cal_spe_func(prok_database = "FAPROTAX")
+fpt.ivy$cal_spe_func(prok_database = "FAPROTAX")
+fpt.cha$cal_spe_func(prok_database = "FAPROTAX")
+fpt.pad$cal_spe_func(prok_database = "FAPROTAX")
+fpt.gro$cal_spe_func(prok_database = "FAPROTAX")
+fpt.mar$cal_spe_func(prok_database = "FAPROTAX")
+fpt.bud$cal_spe_func(prok_database = "FAPROTAX")
+fpt.joa$cal_spe_func(prok_database = "FAPROTAX")
+fpt.hen$cal_spe_func(prok_database = "FAPROTAX")
+fpt.gin$cal_spe_func(prok_database = "FAPROTAX")
+```
+```{r}
+fpt.main$cal_spe_func_perc(abundance_weighted = T)
+fpt.ham$cal_spe_func_perc(abundance_weighted = T)
+fpt.her$cal_spe_func_perc(abundance_weighted = T)
+fpt.jar$cal_spe_func_perc(abundance_weighted = T)
+fpt.oph$cal_spe_func_perc(abundance_weighted = T)
+fpt.kub$cal_spe_func_perc(abundance_weighted = T)
+fpt.kor$cal_spe_func_perc(abundance_weighted = T)
+fpt.wol$cal_spe_func_perc(abundance_weighted = T)
+fpt.iri$cal_spe_func_perc(abundance_weighted = T)
+fpt.iri$res_spe_func_perc <- as.data.frame(fpt.iri$res_spe_func_perc)
+fpt.goo$cal_spe_func_perc(abundance_weighted = T)
+fpt.lam$cal_spe_func_perc(abundance_weighted = T)
+fpt.fra$cal_spe_func_perc(abundance_weighted = T)
+fpt.ivy$cal_spe_func_perc(abundance_weighted = T)
+fpt.cha$cal_spe_func_perc(abundance_weighted = T)
+fpt.pad$cal_spe_func_perc(abundance_weighted = T)
+fpt.gro$cal_spe_func_perc(abundance_weighted = T)
+fpt.mar$cal_spe_func_perc(abundance_weighted = T)
+fpt.bud$cal_spe_func_perc(abundance_weighted = T)
+fpt.joa$cal_spe_func_perc(abundance_weighted = T)
+fpt.hen$cal_spe_func_perc(abundance_weighted = T)
+fpt.gin$cal_spe_func_perc(abundance_weighted = T)
+```

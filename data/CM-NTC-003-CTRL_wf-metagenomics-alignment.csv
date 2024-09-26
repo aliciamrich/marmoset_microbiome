@@ -1,0 +1,2 @@
+index,ref,startpos,endpos,number of reads,covbases,coverage,meandepth,meanbaseq,meanmapq,taxid,superkingdom,kingdom,phylum,class,order,family,genus,species,mean,sd,Coefficient of Variance,pcreads,alias
+0,NR_029097.1,1,1374,1,1290,93.8865,0.938865,22.7,1,237576,Bacteria,unclassified Bacteria kingdom,Firmicutes,Clostridia,Eubacteriales,Lachnospiraceae,Oribacterium,Oribacterium sinus,0.938864628820961,0.239665688529938,0.255271826387701,100,CM-NTC-003-CTRL

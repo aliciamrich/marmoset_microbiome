@@ -1,0 +1,3 @@
+index,ref,startpos,endpos,number of reads,covbases,coverage,meandepth,meanbaseq,meanmapq,taxid,superkingdom,kingdom,phylum,class,order,family,genus,species,mean,sd,Coefficient of Variance,pcreads,alias
+0,NR_074902.1,1,1542,1,1452,94.1634,0.941634,35.9,0,585054,Bacteria,unclassified Bacteria kingdom,Proteobacteria,Gammaproteobacteria,Enterobacterales,Enterobacteriaceae,Escherichia,Escherichia fergusonii,0.941634241245136,0.234509832610948,0.249045566037247,50,CM-NTC-002-CTRL
+1,NR_113064.1,1,1490,1,1399,93.8926,0.938926,30.1,1,1236538,Bacteria,unclassified Bacteria kingdom,Bacteroidota,Bacteroidia,Bacteroidales,Bacteroidaceae,Phocaeicola,Phocaeicola sartorii,0.938926174496644,0.239546081097641,0.255127706101133,50,CM-NTC-002-CTRL
